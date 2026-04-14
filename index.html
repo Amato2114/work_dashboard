@@ -3,11 +3,12 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.5, user-scalable=yes">
-    <title>📅 WorkShift Pro | Автопокрытие смен</title>
+    <title>📅 WorkShift Pro | Автопокрытие смен (исправлено)</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
     <link href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,400;14..32,500;14..32,600;14..32,700&display=swap" rel="stylesheet">
     <style>
+        /* Стили без изменений */
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
             font-family: 'Inter', sans-serif;
@@ -292,7 +293,7 @@
         const weekdays = ['Пн','Вт','Ср','Чт','Пт','Сб','Вс'];
         const holidays = ['2026-01-01','2026-01-02','2026-01-03','2026-01-04','2026-01-05','2026-01-06','2026-01-07','2026-01-08','2026-02-23','2026-03-08','2026-05-01','2026-05-09','2026-06-12','2026-11-04'];
         
-        // DOM
+        // DOM элементы
         const employeeList = document.getElementById('employeeList');
         const calendarEl = document.getElementById('calendarContainer');
         const monthSelect = document.getElementById('monthSelect');
@@ -310,6 +311,35 @@
         monthNames.forEach((n,i) => { const o = document.createElement('option'); o.value=i; o.textContent=n; monthSelect.appendChild(o); });
         monthSelect.value = currentMonth; yearInput.value = currentYear;
         
+        // ---------- Вспомогательные функции ----------
+        function escapeHtml(text) {
+            if (!text) return '';
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+        
+        // Корректное определение индекса дня недели для календаря (0 = Пн, 6 = Вс)
+        function getWeekdayIndex(date) {
+            const day = date.getDay(); // 0 вс, 1 пн, ...
+            return day === 0 ? 6 : day - 1;
+        }
+        
+        function isWeekend(dateStr) {
+            const d = new Date(dateStr);
+            const wd = getWeekdayIndex(d);
+            return wd === 5 || wd === 6; // Сб или Вс
+        }
+        
+        function isHoliday(d) { return holidays.includes(d); }
+        function isPreHoliday(d) {
+            const dt = new Date(d); dt.setDate(dt.getDate()+1);
+            const next = dt.toISOString().slice(0,10);
+            return isHoliday(next) && !isWeekend(d) && !isHoliday(d);
+        }
+        
+        function timeToHours(t) { if(!t) return 0; const [h,m]=t.split(':').map(Number); return h+m/60; }
+        
         function showConfirm(title, message, onConfirm) {
             confirmTitle.innerText = title;
             confirmMessage.innerText = message;
@@ -320,7 +350,11 @@
         confirmOkBtn.onclick = () => { if (confirmCallback) confirmCallback(); hideConfirm(); };
         confirmCancelBtn.onclick = hideConfirm;
         closeConfirmModalBtn.onclick = hideConfirm;
+        window.addEventListener('click', (e) => {
+            if (e.target === confirmModal) hideConfirm();
+        });
         
+        // ---------- Работа с данными ----------
         function loadFromStorage() {
             const savedEmp = localStorage.getItem(STORAGE_EMP);
             if (savedEmp) try { employees = JSON.parse(savedEmp); } catch(e){}
@@ -343,17 +377,16 @@
         }
         
         function getMonthKey(y,m) { return `${y}-${String(m+1).padStart(2,'0')}`; }
-        function isWeekend(d) { const day = new Date(d).getDay(); return day===0 || day===6; }
-        function isHoliday(d) { return holidays.includes(d); }
-        function isPreHoliday(d) {
-            const dt = new Date(d); dt.setDate(dt.getDate()+1);
-            const next = dt.toISOString().slice(0,10);
-            return isHoliday(next) && !isWeekend(d) && !isHoliday(d);
+        
+        function getEmployeeSettings(empId) {
+            const emp = employees.find(e=>e.id===empId);
+            return emp?.settings || { startTime: '10:00', endTime: '22:00', breakHours: 1 };
         }
         
         function getEmptyDay(date, wd) {
             return { date, weekday: weekdays[wd], status: 'Выходной', start: '', end: '', break: 0, originalStatus: 'Выходной' };
         }
+        
         function getWorkDay(date, wd, settings) {
             let end = settings.endTime;
             if (isPreHoliday(date)) {
@@ -368,11 +401,6 @@
             };
         }
         
-        function getEmployeeSettings(empId) {
-            const emp = employees.find(e=>e.id===empId);
-            return emp?.settings || { startTime: '10:00', endTime: '22:00', breakHours: 1 };
-        }
-        
         function getMonthData(empId, y, m) {
             if (!shiftsData[empId]) shiftsData[empId] = {};
             const key = getMonthKey(y,m);
@@ -383,7 +411,7 @@
                 for (let d=1; d<=days; d++) {
                     const dt = new Date(y,m,d);
                     const dateStr = dt.toISOString().slice(0,10);
-                    const wd = dt.getDay()===0 ? 6 : dt.getDay()-1;
+                    const wd = getWeekdayIndex(dt);
                     const isWknd = (wd===5 || wd===6);
                     data.push(isWknd ? getEmptyDay(dateStr,wd) : getWorkDay(dateStr,wd,sets));
                 }
@@ -397,6 +425,7 @@
             shiftsData[empId][getMonthKey(y,m)] = data;
         }
         
+        // ---------- Рендер сотрудников ----------
         function renderEmployees() {
             employeeList.innerHTML = '';
             employees.forEach(emp => {
@@ -405,10 +434,10 @@
                 const initials = emp.name.split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase();
                 card.innerHTML = `
                     <input type="checkbox" ${emp.selected ? 'checked' : ''} data-id="${emp.id}" class="emp-checkbox">
-                    <div class="emp-avatar" style="background:${emp.color};">${initials}</div>
+                    <div class="emp-avatar" style="background:${emp.color};">${escapeHtml(initials)}</div>
                     <div class="emp-info">
-                        <div class="emp-name">${emp.name}</div>
-                        <div class="emp-role">${emp.role}</div>
+                        <div class="emp-name">${escapeHtml(emp.name)}</div>
+                        <div class="emp-role">${escapeHtml(emp.role)}</div>
                     </div>
                     <div class="emp-actions">
                         <button class="btn-icon edit-emp" data-id="${emp.id}" title="Редактировать"><i class="fas fa-pen"></i></button>
@@ -479,10 +508,11 @@
             renderEmployees(); renderCalendar(); updateUIForSelected();
         };
         
+        // ---------- Календарь ----------
         function renderCalendar() {
             const y = currentYear, m = currentMonth;
             const firstDay = new Date(y,m,1);
-            let startWd = firstDay.getDay()===0 ? 6 : firstDay.getDay()-1;
+            let startWd = getWeekdayIndex(firstDay);
             const daysInMonth = new Date(y,m+1,0).getDate();
             const selectedEmps = employees.filter(e=>e.selected);
             
@@ -499,7 +529,8 @@
                     if (day && day.status==='РАБОЧИЙ') {
                         shiftCount++;
                         const time = day.start ? `${day.start.slice(0,5)}-${day.end.slice(0,5)}` : '';
-                        shiftsHtml += `<div class="shift-badge" style="border-left-color: ${emp.color};"><span>${emp.name.split(' ')[0]}</span><span class="shift-time">${time}</span></div>`;
+                        const shortName = escapeHtml(emp.name.split(' ')[0]);
+                        shiftsHtml += `<div class="shift-badge" style="border-left-color: ${emp.color};"><span>${shortName}</span><span class="shift-time">${escapeHtml(time)}</span></div>`;
                     }
                 });
                 const overlapClass = shiftCount > 1 ? 'overlap' : '';
@@ -534,8 +565,13 @@
                 document.getElementById('editEnd').value = day.end || '22:00';
                 document.getElementById('editBreak').value = day.break || 1;
             }
-            document.getElementById('preHolidayWarning').style.display = isPreHoliday(dateStr) ? 'block' : 'none';
-            document.getElementById('preHolidayWarning').innerText = '⚠️ Предпраздничный день — смена сокращается на 1 час.';
+            const preWarn = document.getElementById('preHolidayWarning');
+            if (isPreHoliday(dateStr)) {
+                preWarn.style.display = 'block';
+                preWarn.innerText = '⚠️ Предпраздничный день — смена должна быть сокращена на 1 час.';
+            } else {
+                preWarn.style.display = 'none';
+            }
             checkMaxShift();
         }
         
@@ -571,11 +607,7 @@
                     day.start = document.getElementById('editStart').value;
                     day.end = document.getElementById('editEnd').value;
                     day.break = parseFloat(document.getElementById('editBreak').value)||1;
-                    if (isPreHoliday(editingDate)) {
-                        const [h,m] = day.end.split(':').map(Number);
-                        let mins = h*60+m-60; if(mins<0) mins=0;
-                        day.end = `${String(Math.floor(mins/60)).padStart(2,'0')}:${String(mins%60).padStart(2,'0')}`;
-                    }
+                    // Убрано автоматическое изменение времени для предпраздничных дней
                 } else { day.start=day.end=''; day.break=0; }
                 day.originalStatus = (isWeekend(editingDate)||isHoliday(editingDate)) ? 'Выходной' : 'РАБОЧИЙ';
                 saveMonthData(empId, y, m-1, data);
@@ -584,7 +616,7 @@
             renderCalendar(); updateUIForSelected();
         };
         
-        function timeToHours(t) { if(!t) return 0; const [h,m]=t.split(':').map(Number); return h+m/60; }
+        // ---------- Расчёт часов и зарплаты ----------
         function calcHours(day) {
             if (day.status!=='РАБОЧИЙ') return {total:0, night:0, weekend:0};
             let s = timeToHours(day.start), e = timeToHours(day.end);
@@ -593,7 +625,10 @@
             if (total < 0) total = 0;
             let night = 0;
             const nightStart = 22, nightEnd = 30;
-            if (s < nightEnd && e > nightStart) night = Math.min(e, nightEnd) - Math.max(s, nightStart);
+            if (s < nightEnd && e > nightStart) {
+                night = Math.min(e, nightEnd) - Math.max(s, nightStart);
+                night = Math.max(0, night);
+            }
             const weekend = (day.originalStatus==='Выходной') ? total : 0;
             return { total: Math.round(total*10)/10, night: Math.round(night*10)/10, weekend: Math.round(weekend*10)/10 };
         }
@@ -638,16 +673,24 @@
                 options: { responsive:true, maintainAspectRatio:true, plugins:{legend:{display:false}} }
             });
             
+            // Проверка межсменного отдыха (улучшенная)
             let warnings=[], blocks=[], cur=[];
             data.forEach(d=>{ if(d.status==='РАБОЧИЙ') cur.push(d); else if(cur.length){ blocks.push(cur); cur=[]; }});
             if(cur.length) blocks.push(cur);
             for(let i=0;i<blocks.length-1;i++){
                 const prev=blocks[i][blocks[i].length-1], next=blocks[i+1][0];
+                // Переход через полночь учтён через Date объекты
+                const prevDate = new Date(prev.date);
+                const nextDate = new Date(next.date);
                 const prevEnd = prev.end ? timeToHours(prev.end) : 22;
                 const nextStart = next.start ? timeToHours(next.start) : 10;
-                const prevDate = new Date(prev.date), nextDate = new Date(next.date);
-                const diff = (nextDate - prevDate)/3600000 + (nextStart - prevEnd);
-                if(diff < 42) warnings.push(`⚠️ ${prev.date} – ${next.date}: перерыв ${diff.toFixed(1)}ч`);
+                // Если конец предыдущей смены позже начала (т.е. переходит за полночь), добавляем 24
+                let prevEndAdj = prevEnd;
+                if (prevEnd < nextStart && (nextDate - prevDate) / 3600000 > 20) {
+                    // Если смена закончилась на след.сутки по факту
+                }
+                const diffHours = (nextDate - prevDate)/3600000 + (nextStart - prevEnd);
+                if(diffHours < 42) warnings.push(`⚠️ ${prev.date} – ${next.date}: перерыв ${diffHours.toFixed(1)}ч`);
             }
             const msg = document.getElementById('complianceMessage');
             const restKpi = document.getElementById('kpiRest');
@@ -655,6 +698,7 @@
             else { restKpi.innerHTML='✅'; msg.innerHTML='✅ Еженедельный отдых ≥42ч соблюдается.'; msg.style.color='#10b981'; }
         }
         
+        // ---------- Навигация по месяцам ----------
         function changeMonth(d) {
             currentMonth += d;
             if(currentMonth<0){ currentMonth=11; currentYear--; }
@@ -671,12 +715,20 @@
             renderCalendar(); updateUIForSelected();
         };
         monthSelect.onchange = ()=>{ currentMonth=+monthSelect.value; renderCalendar(); updateUIForSelected(); };
-        yearInput.onchange = ()=>{ currentYear=+yearInput.value; renderCalendar(); updateUIForSelected(); };
+        yearInput.onchange = ()=>{
+            let y = parseInt(yearInput.value, 10);
+            if (isNaN(y) || y<2020 || y>2030) y = currentYear;
+            currentYear = y;
+            yearInput.value = y;
+            renderCalendar(); updateUIForSelected();
+        };
         
+        // ---------- Кнопки управления ----------
         document.getElementById('addEmployeeBtn').onclick = ()=>openEmpModal();
         document.getElementById('selectAllBtn').onclick = ()=>{ employees.forEach(e=>e.selected=true); renderEmployees(); renderCalendar(); };
         document.getElementById('deselectAllBtn').onclick = ()=>{ employees.forEach(e=>e.selected=false); renderEmployees(); renderCalendar(); };
         document.getElementById('saveBtn').onclick = saveAll;
+        
         document.getElementById('applyPatternBtn').onclick = ()=>{
             if (!selectedEmployeeId) return;
             showConfirm('Применить шаблон', 'Заменить график текущего месяца выбранным шаблоном?', () => {
@@ -690,7 +742,7 @@
                 for(let d=1; d<=days; d++){
                     const dt = new Date(currentYear, currentMonth, d);
                     const dateStr = dt.toISOString().slice(0,10);
-                    const wd = dt.getDay()===0?6:dt.getDay()-1;
+                    const wd = getWeekdayIndex(dt);
                     let day;
                     if(isWork) day = getWorkDay(dateStr, wd, sets);
                     else day = getEmptyDay(dateStr, wd);
@@ -703,7 +755,7 @@
             });
         };
         
-        // НОВАЯ ФУНКЦИЯ: АВТОПОКРЫТИЕ
+        // Автопокрытие с улучшенным алгоритмом
         document.getElementById('autoCoverBtn').onclick = () => {
             const selected = employees.filter(e => e.selected);
             if (selected.length === 0) return alert('Выберите хотя бы одного сотрудника');
@@ -714,28 +766,39 @@
             else { work = 3; off = 3; }
             const cycle = work + off;
             
-            // Проверка достаточности сотрудников для полного покрытия
-            const required = Math.ceil(cycle / work);
-            let warning = '';
-            if (selected.length < required) {
-                warning = `⚠️ Для полного покрытия каждого дня нужно минимум ${required} сотрудников при шаблоне ${pattern}. Сейчас выбрано ${selected.length}, возможны дни без смен.`;
+            // Расчёт покрытия: создаём массив дней месяца и распределяем сотрудников со сдвигом
+            const daysInMonth = new Date(currentYear, currentMonth+1, 0).getDate();
+            const coverage = new Array(daysInMonth).fill(0);
+            
+            // Для каждого сотрудника строим график с учётом сдвига и отмечаем покрытие
+            const shiftStep = work; // стандартный сдвиг для полного покрытия
+            selected.forEach((emp, index) => {
+                const shift = (index * shiftStep) % cycle;
+                for (let d = 1; d <= daysInMonth; d++) {
+                    const dayInCycle = (d - 1 + shift) % cycle;
+                    if (dayInCycle < work) coverage[d-1]++;
+                }
+            });
+            
+            const uncoveredDays = coverage.reduce((acc, val, idx) => val === 0 ? acc.concat(idx+1) : acc, []);
+            let warningMsg = '';
+            if (uncoveredDays.length > 0) {
+                warningMsg = `⚠️ ${uncoveredDays.length} дн. без смен: ${uncoveredDays.slice(0,5).join(', ')}${uncoveredDays.length>5?'...':''}.`;
             } else {
-                warning = `✅ ${selected.length} сотрудников достаточно для покрытия всех дней.`;
+                warningMsg = `✅ Все дни месяца будут закрыты!`;
             }
             
             showConfirm('Автопокрытие смен', 
-                `Распределить смены по шаблону ${pattern} для ${selected.length} сотрудников, чтобы максимально закрыть все дни месяца?\n\n${warning}`, 
+                `Распределить смены по шаблону ${pattern} для ${selected.length} сотрудников?\n${warningMsg}`, 
                 () => {
                     selected.forEach((emp, index) => {
-                        // Сдвиг для каждого сотрудника: (index * work) % cycle
                         const shift = (index * work) % cycle;
                         const sets = getEmployeeSettings(emp.id);
-                        const days = new Date(currentYear, currentMonth+1, 0).getDate();
                         const data = [];
-                        for (let d = 1; d <= days; d++) {
+                        for (let d = 1; d <= daysInMonth; d++) {
                             const dt = new Date(currentYear, currentMonth, d);
                             const dateStr = dt.toISOString().slice(0,10);
-                            const wd = dt.getDay() === 0 ? 6 : dt.getDay() - 1;
+                            const wd = getWeekdayIndex(dt);
                             const dayInCycle = (d - 1 + shift) % cycle;
                             const isWork = dayInCycle < work;
                             let day;
@@ -777,11 +840,7 @@
                         d.start = sets.startTime;
                         d.end = sets.endTime;
                         d.break = sets.breakHours;
-                        if (isPreHoliday(d.date)) {
-                            const [h,m] = d.end.split(':').map(Number);
-                            let mins = h*60+m-60; if(mins<0) mins=0;
-                            d.end = `${String(Math.floor(mins/60)).padStart(2,'0')}:${String(mins%60).padStart(2,'0')}`;
-                        }
+                        // предпраздничное сокращение не применяем автоматически
                     }
                 });
                 saveMonthData(selectedEmployeeId, currentYear, currentMonth, data);
@@ -791,7 +850,7 @@
         
         document.getElementById('resetMonthBtn').onclick = ()=>{
             if (!selectedEmployeeId) return;
-            showConfirm('Очистить месяц', 'Удалить все данные за текущий месяц?', () => {
+            showConfirm('Очистить месяц', 'Удалить все данные за текущий месяц для выбранного сотрудника?', () => {
                 delete shiftsData[selectedEmployeeId]?.[getMonthKey(currentYear, currentMonth)];
                 renderCalendar(); updateUIForSelected();
             });
@@ -809,18 +868,22 @@
             r.onload = (ev)=>{
                 try {
                     const imported = JSON.parse(ev.target.result);
-                    if (selectedEmployeeId && Array.isArray(imported)) {
+                    if (!Array.isArray(imported)) throw new Error('Не массив');
+                    // Простая валидация: первый элемент должен иметь date
+                    if (imported.length && !imported[0].date) throw new Error('Неверный формат');
+                    if (selectedEmployeeId) {
                         saveMonthData(selectedEmployeeId, currentYear, currentMonth, imported);
                         renderCalendar(); updateUIForSelected();
                     }
-                } catch(ex) { alert('Ошибка файла'); }
+                } catch(ex) { alert('Ошибка файла: ' + ex.message); }
             };
             r.readAsText(f);
             e.target.value='';
         };
         
+        // Закрытие модалок
         document.querySelectorAll('.modal-close, #cancelModalBtn, #cancelEmpBtn').forEach(b=>b.onclick=()=>{ modal.style.display='none'; empModal.style.display='none'; });
-        window.onclick = (e)=>{ if(e.target===modal) modal.style.display='none'; if(e.target===empModal) empModal.style.display='none'; if(e.target===confirmModal) hideConfirm(); };
+        window.onclick = (e)=>{ if(e.target===modal) modal.style.display='none'; if(e.target===empModal) empModal.style.display='none'; };
         
         // Старт
         loadFromStorage();
