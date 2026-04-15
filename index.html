@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.5, user-scalable=yes">
-    <title>🚀 WorkShift Pro | Исправленная версия 3.3</title>
+    <title>🚀 WorkShift Pro | Исправленная версия 3.4</title>
     <!-- Chart.js -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
     <!-- Font Awesome -->
@@ -253,7 +253,7 @@
         <!-- Шапка -->
         <div style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 16px;">
             <div>
-                <h1>👥 WorkShift Pro <span class="badge-law">Исправленная версия 3.3</span></h1>
+                <h1>👥 WorkShift Pro <span class="badge-law">Исправленная версия 3.4</span></h1>
                 <div class="subtitle">Суммированный учёт • Смена ≤12ч • Фикс.выходные • Автопокрытие • 42ч отдых</div>
             </div>
             <div style="display: flex; gap: 12px; align-items: center;">
@@ -446,7 +446,6 @@
 
     // ---------- Утилиты для работы с датами ----------
     function formatYMD(year, month, day) {
-        // month: 0-11
         return `${year}-${String(month+1).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
     }
 
@@ -568,7 +567,6 @@
                     const tx = this.db.transaction(storeName, 'readwrite');
                     const store = tx.objectStore(storeName);
                     if (storeName === 'employees') {
-                        // Исправлено: атомарное обновление без clear
                         const getAllReq = store.getAll();
                         getAllReq.onsuccess = () => {
                             const existing = getAllReq.result;
@@ -750,7 +748,6 @@
         const [y,m,d] = dateStr.split('-').map(Number);
         const monthIdx = m-1;
         if (!hasMonthData(empId, y, monthIdx)) {
-            // автоматически создаём месяц, чтобы форма не была пустой
             getMonthData(empId, y, monthIdx);
         }
         const data = shiftsData[empId][getMonthKey(y, monthIdx)];
@@ -1007,6 +1004,7 @@
             const wdName = WEEKDAYS[getWeekdayIndex(dt)];
             let shiftsHtml = '';
             selectedEmps.forEach(emp => {
+                // ИСПРАВЛЕНО: используем getMonthData для мобильной версии
                 const data = getMonthData(emp.id, y, monthIdx);
                 const day = data.find(dd=>dd.date===dateStr);
                 if (day) {
@@ -1072,16 +1070,28 @@
                 const range = getAllDatesInRange(first, date);
                 selectedDates = new Set(range);
             }
+            bulkEditPanel.style.display = selectedDates.size > 0 ? 'flex' : 'none';
+            highlightSelectedDates();
         } else {
-            if (!e.ctrlKey && !e.metaKey) selectedDates.clear();
-            if (selectedDates.has(date)) selectedDates.delete(date);
-            else selectedDates.add(date);
-        }
-        highlightSelectedDates();
-        bulkEditPanel.style.display = selectedDates.size > 0 ? 'flex' : 'none';
-        if (!e.shiftKey && !e.ctrlKey && selectedDates.size === 1) {
-            openEditModal(date);
-            bulkEditPanel.style.display = 'none';
+            // ИСПРАВЛЕНО: при одиночном клике очищаем выделение
+            if (!e.ctrlKey && !e.metaKey) {
+                selectedDates.clear();
+                bulkEditPanel.style.display = 'none';
+                highlightSelectedDates();
+            }
+            if (selectedDates.has(date)) {
+                selectedDates.delete(date);
+            } else {
+                selectedDates.add(date);
+            }
+            highlightSelectedDates();
+            bulkEditPanel.style.display = selectedDates.size > 0 ? 'flex' : 'none';
+            if (!e.shiftKey && !e.ctrlKey && selectedDates.size === 1) {
+                openEditModal(date);
+                bulkEditPanel.style.display = 'none';
+                selectedDates.clear(); // дополнительно очищаем, чтобы не мешало
+                highlightSelectedDates();
+            }
         }
     }
 
@@ -1213,6 +1223,10 @@
 
     // ---------- Редактирование дня ----------
     function openEditModal(dateStr, empId = null) {
+        if (employees.length === 0) {
+            showToast('Нет сотрудников для редактирования', 'warning');
+            return;
+        }
         editingDate = dateStr;
         const sel = document.getElementById('editEmpSelect');
         sel.innerHTML = '';
@@ -1333,7 +1347,6 @@
                 let end = document.getElementById('editEnd').value;
                 const br = parseFloat(document.getElementById('editBreak').value)||1;
                 
-                // Проверка предпраздничного сокращения
                 if (isPreHoliday(editingDate)) {
                     const adjusted = adjustPreHolidayEnd(start, end, br);
                     if (!adjusted) {
@@ -1343,7 +1356,6 @@
                     end = adjusted;
                 }
                 
-                // Проверка на отрицательную длительность
                 let [sh,sm] = start.split(':').map(Number);
                 let [eh,em] = end.split(':').map(Number);
                 let startMins = sh*60+sm, endMins = eh*60+em;
@@ -1410,6 +1422,7 @@
         const sets = getEmployeeSettings(empId);
         const errors = [];
         const restWarnings = [];
+        const fixedDayViolations = [];
         
         selectedDates.forEach(dateStr => {
             const day = data.find(d => d.date === dateStr);
@@ -1417,7 +1430,7 @@
                 const dt = parseYMD(dateStr);
                 const dayOfWeek = dt.getDay() === 0 ? 7 : dt.getDay();
                 if (status === 'РАБОЧИЙ' && emp.fixedDaysOff.includes(dayOfWeek)) {
-                    errors.push(`${dateStr}: фикс.вых.`);
+                    fixedDayViolations.push(dateStr);
                     return;
                 }
                 if (status === 'РАБОЧИЙ') {
@@ -1436,18 +1449,42 @@
                     }
                     const restError = checkRestViolation(empId, dateStr, sets.startTime, end);
                     if (restError) restWarnings.push(`${dateStr}: ${restError}`);
-                    
-                    day.status = status;
-                    day.start = sets.startTime;
-                    day.end = end;
-                    day.break = sets.breakHours;
-                    day.originalStatus = (isWeekend(dateStr)||isHoliday(dateStr)) ? 'Выходной' : 'РАБОЧИЙ';
-                } else {
-                    day.status = status;
-                    day.start = day.end = '';
-                    day.break = 0;
-                    day.originalStatus = (isWeekend(dateStr)||isHoliday(dateStr)) ? 'Выходной' : 'РАБОЧИЙ';
                 }
+            }
+        });
+        
+        // Если есть нарушения фиксированных выходных, запрашиваем подтверждение
+        if (fixedDayViolations.length > 0) {
+            const msg = `Обнаружены фиксированные выходные:\n${fixedDayViolations.join(', ')}\nПродолжить?`;
+            showConfirm('Фиксированные выходные', msg, () => {
+                applyBulkStatusAfterConfirm(empId, y, monthIdx, data, status, sets, errors, restWarnings, fixedDayViolations);
+            });
+        } else {
+            applyBulkStatusAfterConfirm(empId, y, monthIdx, data, status, sets, errors, restWarnings, []);
+        }
+    }
+    
+    function applyBulkStatusAfterConfirm(empId, y, monthIdx, data, status, sets, errors, restWarnings, fixedDayViolations) {
+        const emp = employees.find(e=>e.id===empId);
+        selectedDates.forEach(dateStr => {
+            const day = data.find(d => d.date === dateStr);
+            if (!day) return;
+            if (status === 'РАБОЧИЙ') {
+                let end = sets.endTime;
+                if (isPreHoliday(dateStr)) {
+                    const adjusted = adjustPreHolidayEnd(sets.startTime, sets.endTime, sets.breakHours);
+                    if (adjusted) end = adjusted;
+                }
+                day.status = status;
+                day.start = sets.startTime;
+                day.end = end;
+                day.break = sets.breakHours;
+                day.originalStatus = (isWeekend(dateStr)||isHoliday(dateStr)) ? 'Выходной' : 'РАБОЧИЙ';
+            } else {
+                day.status = status;
+                day.start = day.end = '';
+                day.break = 0;
+                day.originalStatus = (isWeekend(dateStr)||isHoliday(dateStr)) ? 'Выходной' : 'РАБОЧИЙ';
             }
         });
         
@@ -1485,6 +1522,7 @@
         const totalWorkMins = endMins - startMins;
         if (totalWorkMins <= 0) return {total:0, night:0, weekend:0};
         
+        // Исправлен расчёт ночных: вычитаем перерыв из общей длительности, а ночные считаем по фактическим интервалам
         let nightMins = 0;
         const nightStart1 = 22*60, nightEnd1 = 24*60;
         const nightStart2 = 0, nightEnd2 = 6*60;
@@ -1499,16 +1537,15 @@
         let o2e = Math.min(workEnd2, nightEnd2);
         if (o2e > o2s) nightMins += o2e - o2s;
         
-        if (breakMins > 0 && nightMins > 0) {
-            const nightRatio = nightMins / totalWorkMins;
-            const breakNightMins = breakMins * nightRatio;
-            nightMins = Math.max(0, nightMins - breakNightMins);
-        }
-        const night = nightMins / 60;
-        
+        // Перерыв вычитается из общего времени, ночные часы не должны превышать фактически отработанное ночное время
+        // Корректный подход: вычесть перерыв из общего времени, но ночные часы ограничить максимумом (nightMins)
         let totalMins = endMins - startMins - breakMins;
         if (totalMins < 0) totalMins = 0;
         const total = totalMins / 60;
+        
+        // Ночные часы не могут превышать общее время и не могут быть отрицательными
+        let night = Math.min(nightMins / 60, total);
+        night = Math.max(0, night);
         
         const weekend = (day.originalStatus === 'Выходной') ? total : 0;
         return { total: Math.round(total*10)/10, night: Math.round(night*10)/10, weekend: Math.round(weekend*10)/10 };
@@ -1613,7 +1650,7 @@
             const prevEnd = computeShiftEndDateTime(prev.date, prev.start, prev.end);
             const nextStart = new Date(next.date + 'T' + next.start);
             const diffHours = (nextStart - prevEnd) / (1000 * 60 * 60);
-            if(diffHours < 42) warnings.push(`⚠️ ${prev.date} – ${next.date}: ${diffHours.toFixed(1)}ч`);
+            if(diffHours < 42) warnings.push(`⚠️ ${escapeHtml(prev.date)} – ${escapeHtml(next.date)}: ${diffHours.toFixed(1)}ч`);
         }
         const msg = document.getElementById('complianceMessage');
         const restKpi = document.getElementById('kpiRest');
@@ -1833,23 +1870,41 @@
     function copyMonthToNext() {
         if (!selectedEmployeeId) return showToast('Выберите сотрудника', 'error');
         const emp = employees.find(e=>e.id===selectedEmployeeId);
-        const fixedDays = emp.fixedDaysOff;
         const srcData = getMonthData(selectedEmployeeId, currentYear, currentMonth);
         let nextMonth = currentMonth + 1, nextYear = currentYear;
         if (nextMonth > 11) { nextMonth = 0; nextYear++; }
         const daysInNext = new Date(nextYear, nextMonth+1, 0).getDate();
         const newData = [];
         const sets = getEmployeeSettings(selectedEmployeeId);
+        const fixedDays = emp.fixedDaysOff;
+        
         for (let d=1; d<=daysInNext; d++) {
             const dt = new Date(nextYear, nextMonth, d);
             const dateStr = formatYMD(nextYear, nextMonth, d);
             const dayOfWeek = dt.getDay() === 0 ? 7 : dt.getDay();
-            // Исправлено: копируем по номеру дня, а не по дате
+            // ИСПРАВЛЕНО: копируем статус и параметры, но проверяем фиксированные выходные
             const srcDay = srcData.length >= d ? srcData[d-1] : null;
             let newDay;
-            if (srcDay && srcDay.status === 'РАБОЧИЙ' && !fixedDays.includes(dayOfWeek)) {
-                newDay = getWorkDay(dateStr, sets, fixedDays);
-                if (newDay.status !== 'РАБОЧИЙ') newDay = getEmptyDay(dateStr);
+            if (srcDay) {
+                if (srcDay.status === 'РАБОЧИЙ') {
+                    if (fixedDays.includes(dayOfWeek)) {
+                        newDay = getEmptyDay(dateStr);
+                    } else {
+                        newDay = { ...srcDay, date: dateStr, weekday: WEEKDAYS[getWeekdayIndex(dt)] };
+                        // Пересчитываем предпраздничные и ограничения
+                        const workDay = getWorkDay(dateStr, sets, fixedDays);
+                        if (workDay.status === 'РАБОЧИЙ') {
+                            newDay.start = workDay.start;
+                            newDay.end = workDay.end;
+                            newDay.break = workDay.break;
+                        } else {
+                            newDay = getEmptyDay(dateStr);
+                        }
+                    }
+                } else {
+                    // Копируем нерабочие статусы (отпуск, больничный и т.д.)
+                    newDay = { ...srcDay, date: dateStr, weekday: WEEKDAYS[getWeekdayIndex(dt)] };
+                }
             } else {
                 newDay = getEmptyDay(dateStr);
             }
@@ -1902,8 +1957,11 @@
         reader.onload = async (ev) => {
             try {
                 const imported = JSON.parse(ev.target.result);
-                if (!imported.employees || !imported.shifts) throw new Error('Неверный формат');
-                employees = imported.employees.map(emp => ({
+                // ИСПРАВЛЕНО: валидация структуры перед присваиванием
+                if (!imported.employees || !Array.isArray(imported.employees) || !imported.shifts || typeof imported.shifts !== 'object') {
+                    throw new Error('Неверный формат файла');
+                }
+                const newEmployees = imported.employees.map(emp => ({
                     ...emp,
                     selected: emp.selected !== undefined ? emp.selected : true,
                     settings: emp.settings || { startTime: '10:00', endTime: '22:00', breakHours: 1 },
@@ -1911,7 +1969,11 @@
                     priority: emp.priority || 5,
                     color: isValidColor(emp.color) ? emp.color : '#3b82f6'
                 }));
-                shiftsData = imported.shifts;
+                const newShifts = imported.shifts;
+                
+                // Применяем только после успешной валидации
+                employees = newEmployees;
+                shiftsData = newShifts;
                 await saveAll();
                 selectedEmployeeId = employees.length ? employees[0].id : null;
                 selectedDates.clear();
@@ -1953,7 +2015,6 @@
             const emp = employees.find(e=>e.id===selectedEmployeeId);
             const fixedDays = emp.fixedDaysOff;
             const data = getMonthData(selectedEmployeeId, currentYear, currentMonth);
-            // Полная перегенерация месяца
             const newData = [];
             const daysInMonth = new Date(currentYear, currentMonth+1, 0).getDate();
             for (let d=1; d<=daysInMonth; d++) {
