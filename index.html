@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.5, user-scalable=yes">
-    <title>🚀 WorkShift Pro | Исправленная версия 2.4</title>
+    <title>🚀 WorkShift Pro | Исправленная версия 3.0</title>
     <!-- Chart.js -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
     <!-- Font Awesome -->
@@ -11,7 +11,7 @@
     <!-- Google Fonts -->
     <link href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,400;14..32,500;14..32,600;14..32,700&display=swap" rel="stylesheet">
     <style>
-        /* ----- CSS переменные для тем (без изменений) ----- */
+        /* ----- CSS переменные для тем ----- */
         * { margin: 0; padding: 0; box-sizing: border-box; }
         :root {
             --bg-primary: #0b1120;
@@ -252,7 +252,7 @@
         <!-- Шапка -->
         <div style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 16px;">
             <div>
-                <h1>👥 WorkShift Pro <span class="badge-law">Исправленная версия 2.4</span></h1>
+                <h1>👥 WorkShift Pro <span class="badge-law">Исправленная версия 3.0</span></h1>
                 <div class="subtitle">Суммированный учёт • Смена ≤12ч • Фикс.выходные • Автопокрытие • 42ч отдых</div>
             </div>
             <div style="display: flex; gap: 12px; align-items: center;">
@@ -434,7 +434,7 @@
     "use strict";
 
     // ---------- Конфигурация ----------
-    const STORAGE_PREFIX = 'workshift_v2_';
+    const STORAGE_PREFIX = 'workshift_v3_';
     const MONTH_NAMES = ['Январь','Февраль','Март','Апрель','Май','Июнь','Июль','Август','Сентябрь','Октябрь','Ноябрь','Декабрь'];
     const WEEKDAYS = ['Пн','Вт','Ср','Чт','Пт','Сб','Вс'];
     const HOLIDAYS = ['2026-01-01','2026-01-02','2026-01-03','2026-01-04','2026-01-05','2026-01-06','2026-01-07','2026-01-08','2026-02-23','2026-03-08','2026-05-01','2026-05-09','2026-06-12','2026-11-04'];
@@ -526,7 +526,7 @@
         async init() {
             if (!window.indexedDB) return false;
             return new Promise((resolve) => {
-                const request = indexedDB.open('WorkShiftDB', 2);
+                const request = indexedDB.open('WorkShiftDB', 3);
                 request.onupgradeneeded = (e) => {
                     const db = e.target.result;
                     if (!db.objectStoreNames.contains('employees')) db.createObjectStore('employees', { keyPath: 'id' });
@@ -563,16 +563,21 @@
                     const tx = this.db.transaction(storeName, 'readwrite');
                     const store = tx.objectStore(storeName);
                     if (storeName === 'employees') {
-                        // Атомарная замена: очищаем и добавляем в одной транзакции
                         const clearReq = store.clear();
                         clearReq.onsuccess = () => {
-                            value.forEach(v => store.put(v));
+                            let count = value.length;
+                            value.forEach(v => {
+                                const putReq = store.put(v);
+                                putReq.onsuccess = () => { count--; if (count === 0) resolve(); };
+                                putReq.onerror = (e) => reject(e.target.error);
+                            });
+                            if (count === 0) resolve();
                         };
                     } else {
                         store.put(value, key || 'data');
+                        tx.oncomplete = () => resolve();
+                        tx.onerror = (e) => reject(e.target.error);
                     }
-                    tx.oncomplete = () => resolve();
-                    tx.onerror = (e) => reject(e.target.error);
                 });
             } else {
                 localStorage.setItem(STORAGE_PREFIX + storeName, JSON.stringify(value));
@@ -660,9 +665,8 @@
     }
 
     function getWorkDay(date, wd, settings, fixedDaysOff = []) {
-        // Проверка фиксированных выходных сотрудника
         const dt = parseYMD(date);
-        const dayOfWeek = dt.getDay() === 0 ? 7 : dt.getDay(); // 1-пн, 7-вс
+        const dayOfWeek = dt.getDay() === 0 ? 7 : dt.getDay();
         if (fixedDaysOff.includes(dayOfWeek)) {
             return getEmptyDay(date, wd);
         }
@@ -693,6 +697,13 @@
         return hours > 12;
     }
 
+    // ВАЖНОЕ ИСПРАВЛЕНИЕ: проверка существования месяца без создания нового
+    function hasMonthData(empId, y, m) {
+        if (!shiftsData[empId]) return false;
+        const key = getMonthKey(y, m);
+        return !!shiftsData[empId][key];
+    }
+
     function getMonthData(empId, y, m) {
         if (!shiftsData[empId]) shiftsData[empId] = {};
         const key = getMonthKey(y, m);
@@ -711,6 +722,14 @@
             shiftsData[empId][key] = data;
         }
         return shiftsData[empId][key];
+    }
+
+    // Получение дня только если месяц существует (без автосоздания)
+    function getDayIfExists(empId, dateStr) {
+        const [y,m,d] = dateStr.split('-').map(Number);
+        if (!hasMonthData(empId, y, m-1)) return null;
+        const data = shiftsData[empId][getMonthKey(y, m-1)];
+        return data.find(dd => dd.date === dateStr);
     }
 
     function saveMonthData(empId, y, m, data) {
@@ -803,8 +822,9 @@
                     <button class="btn-icon delete-emp" data-id="${emp.id}" title="Удалить"><i class="fas fa-trash-alt"></i></button>
                 </div>
             `;
+            // ИСПРАВЛЕНИЕ: Drag только этого сотрудника
             card.addEventListener('dragstart', e => {
-                e.dataTransfer.setData('text/plain', JSON.stringify(employees.filter(e=>e.selected).map(e=>e.id)));
+                e.dataTransfer.setData('text/plain', emp.id);
                 card.classList.add('dragging');
             });
             card.addEventListener('dragend', () => card.classList.remove('dragging'));
@@ -1001,7 +1021,6 @@
             mobileCalendarEl.addEventListener('click', e => {
                 const item = e.target.closest('.mobile-day-item');
                 if (item) {
-                    // Открываем редактирование для активного сотрудника
                     if (selectedEmployeeId) {
                         openEditModal(item.dataset.date, selectedEmployeeId);
                     } else {
@@ -1064,22 +1083,18 @@
 
     function handleDropOnCalendar(e) {
         e.preventDefault();
+        // Убираем drag-over со всех ячеек
+        document.querySelectorAll('.calendar-cell').forEach(c => c.classList.remove('drag-over'));
         const cell = e.target.closest('.calendar-cell[data-date]');
         if (!cell) return;
-        cell.classList.remove('drag-over');
         const dateStr = cell.dataset.date;
         const [y,m] = dateStr.split('-').map(Number);
         if (m-1 !== currentMonth || y !== currentYear) return;
-        try {
-            const empIds = JSON.parse(e.dataTransfer.getData('text/plain'));
-            empIds.forEach(empId => assignShiftToEmployee(empId, dateStr));
-        } catch {
-            const empId = e.dataTransfer.getData('text/plain');
-            assignShiftToEmployee(empId, dateStr);
-        }
+        const empId = e.dataTransfer.getData('text/plain');
+        if (empId) assignShiftToEmployee(empId, dateStr);
     }
 
-    // Проверка межсменного отдыха для конкретного сотрудника и даты
+    // Проверка межсменного отдыха (использует только существующие месяцы)
     function checkRestViolation(empId, dateStr, startTime, endTime) {
         const prevWork = getPrevWorkDay(empId, dateStr);
         const nextWork = getNextWorkDay(empId, dateStr);
@@ -1115,9 +1130,17 @@
         const dt = parseYMD(dateStr);
         const dayOfWeek = dt.getDay() === 0 ? 7 : dt.getDay();
         if (emp.fixedDaysOff.includes(dayOfWeek)) {
-            showToast(`У ${emp.name} фиксированный выходной`, 'error');
+            // Используем кастомное подтверждение вместо window.confirm
+            showConfirm('Фиксированный выходной', `У сотрудника ${emp.name} фиксированный выходной. Всё равно назначить рабочую смену?`, () => {
+                performShiftAssignment(empId, dateStr, true);
+            });
             return;
         }
+        performShiftAssignment(empId, dateStr, false);
+    }
+
+    function performShiftAssignment(empId, dateStr, force) {
+        const emp = employees.find(e => e.id === empId);
         const [y, m] = dateStr.split('-').map(Number);
         const data = getMonthData(empId, y, m-1);
         const day = data.find(d => d.date === dateStr);
@@ -1142,7 +1165,6 @@
             const restError = checkRestViolation(empId, dateStr, start, end);
             if (restError) {
                 showToast(restError, 'warning');
-                // не отменяем назначение, только предупреждаем
             }
             
             day.status = 'РАБОЧИЙ';
@@ -1244,8 +1266,16 @@
         const dt = parseYMD(editingDate);
         const dayOfWeek = dt.getDay() === 0 ? 7 : dt.getDay();
         if (emp && emp.fixedDaysOff.includes(dayOfWeek) && document.getElementById('editStatus').value === 'РАБОЧИЙ') {
-            if (!confirm(`У сотрудника фиксированный выходной. Всё равно назначить?`)) return;
+            showConfirm('Фиксированный выходной', `У сотрудника фиксированный выходной. Всё равно назначить?`, () => {
+                saveEditModal();
+            });
+            return;
         }
+        saveEditModal();
+    };
+
+    function saveEditModal() {
+        const empId = document.getElementById('editEmpSelect').value;
         const [y, m] = editingDate.split('-').map(Number);
         const data = getMonthData(empId, y, m-1);
         const day = data.find(d => d.date === editingDate);
@@ -1276,7 +1306,7 @@
         modal.style.display = 'none';
         renderCalendar();
         updateUIForSelected();
-    };
+    }
 
     // ---------- Массовое редактирование ----------
     document.getElementById('bulkSetWork').onclick = () => bulkEditStatus('РАБОЧИЙ');
@@ -1384,10 +1414,26 @@
         return { total: Math.round(total*10)/10, night: Math.round(night*10)/10, weekend: Math.round(weekend*10)/10 };
     }
 
-    function getDayWithDate(empId, dateStr) {
-        const [y,m,d] = dateStr.split('-').map(Number);
-        const data = getMonthData(empId, y, m-1);
-        return data.find(dd => dd.date === dateStr);
+    function getPrevWorkDay(empId, dateStr, maxLookback = 14) {
+        const dt = parseYMD(dateStr);
+        for (let i=1; i<=maxLookback; i++) {
+            dt.setDate(dt.getDate() - 1);
+            const prevStr = formatYMD(dt.getFullYear(), dt.getMonth(), dt.getDate());
+            const day = getDayIfExists(empId, prevStr);
+            if (day && day.status === 'РАБОЧИЙ') return day;
+        }
+        return null;
+    }
+
+    function getNextWorkDay(empId, dateStr, maxLookahead = 14) {
+        const dt = parseYMD(dateStr);
+        for (let i=1; i<=maxLookahead; i++) {
+            dt.setDate(dt.getDate() + 1);
+            const nextStr = formatYMD(dt.getFullYear(), dt.getMonth(), dt.getDate());
+            const day = getDayIfExists(empId, nextStr);
+            if (day && day.status === 'РАБОЧИЙ') return day;
+        }
+        return null;
     }
 
     function updateUIForSelected() {
@@ -1446,14 +1492,15 @@
             options: { responsive: true, maintainAspectRatio: true, plugins: { legend: { display: false } } }
         });
         
-        // Проверка отдыха с соседними месяцами (исправленный расчёт)
+        // Проверка отдыха только по существующим месяцам
         const allDays = [];
         [-1, 0, 1].forEach(offset => {
             let y = currentYear, m = currentMonth + offset;
             if (m < 0) { m = 11; y--; }
             if (m > 11) { m = 0; y++; }
-            const monthData = getMonthData(emp.id, y, m);
-            allDays.push(...monthData);
+            if (hasMonthData(emp.id, y, m)) {
+                allDays.push(...shiftsData[emp.id][getMonthKey(y, m)]);
+            }
         });
         let warnings = [], blocks = [], cur = [];
         allDays.forEach(d => { if(d.status==='РАБОЧИЙ') cur.push(d); else if(cur.length){ blocks.push(cur); cur=[]; }});
@@ -1485,12 +1532,16 @@
         currentMonth += delta;
         if(currentMonth < 0) { currentMonth = 11; currentYear--; }
         if(currentMonth > 11) { currentMonth = 0; currentYear++; }
-        monthSelect.value = currentMonth;
-        yearInput.value = currentYear;
+        syncMonthYearUI();
         selectedDates.clear();
         bulkEditPanel.style.display = 'none';
         renderCalendar();
         updateUIForSelected();
+    }
+
+    function syncMonthYearUI() {
+        monthSelect.value = currentMonth;
+        yearInput.value = currentYear;
     }
 
     document.getElementById('prevMonthBtn').onclick = () => changeMonth(-1);
@@ -1499,8 +1550,7 @@
         const now = new Date();
         currentYear = now.getFullYear();
         currentMonth = now.getMonth();
-        monthSelect.value = currentMonth;
-        yearInput.value = currentYear;
+        syncMonthYearUI();
         selectedDates.clear();
         bulkEditPanel.style.display = 'none';
         renderCalendar();
@@ -1537,7 +1587,7 @@
         renderCalendar();
     };
     document.getElementById('saveBtn').onclick = () => saveAll();
-    document.getElementById('exportFullBtn').onclick = exportFullData;
+    document.getElementById('exportFullBtn').onclick = () => { showLoading(true); exportFullData(); showLoading(false); };
     document.getElementById('importFullBtn').onclick = () => document.getElementById('importFullFile').click();
     document.getElementById('copyMonthBtn').onclick = copyMonthToNext;
     document.getElementById('resetMonthBtn').onclick = resetMonth;
@@ -1583,28 +1633,6 @@
     };
 
     document.getElementById('autoCoverBtn').onclick = () => advancedAutoCover();
-
-    function getPrevWorkDay(empId, dateStr, maxLookback = 14) {
-        const dt = parseYMD(dateStr);
-        for (let i=1; i<=maxLookback; i++) {
-            dt.setDate(dt.getDate() - 1);
-            const prevStr = formatYMD(dt.getFullYear(), dt.getMonth(), dt.getDate());
-            const day = getDayWithDate(empId, prevStr);
-            if (day && day.status === 'РАБОЧИЙ') return day;
-        }
-        return null;
-    }
-
-    function getNextWorkDay(empId, dateStr, maxLookahead = 14) {
-        const dt = parseYMD(dateStr);
-        for (let i=1; i<=maxLookahead; i++) {
-            dt.setDate(dt.getDate() + 1);
-            const nextStr = formatYMD(dt.getFullYear(), dt.getMonth(), dt.getDate());
-            const day = getDayWithDate(empId, nextStr);
-            if (day && day.status === 'РАБОЧИЙ') return day;
-        }
-        return null;
-    }
 
     function advancedAutoCover() {
         const selected = employees.filter(e => e.selected);
@@ -1669,7 +1697,6 @@
                     const day = getWorkDay(dateStr, wd, sets, emp.fixedDaysOff);
                     return day.status === 'РАБОЧИЙ';
                 }).filter(emp => {
-                    // Проверка межсменного отдыха (используем новую функцию)
                     const sets = getEmployeeSettings(emp.id);
                     const restError = checkRestViolation(emp.id, dateStr, sets.startTime, sets.endTime);
                     return !restError;
@@ -1713,14 +1740,10 @@
             const dateStr = formatYMD(nextYear, nextMonth, d);
             const wd = getWeekdayIndex(dt);
             const dayOfWeek = dt.getDay() === 0 ? 7 : dt.getDay();
-            // Если фиксированный выходной, то не копируем рабочий день
-            if (fixedDays.includes(dayOfWeek)) {
-                newData.push(getEmptyDay(dateStr, wd));
-                continue;
-            }
-            const srcDay = srcData.find(sd => sd.weekday === WEEKDAYS[wd] && sd.status === 'РАБОЧИЙ');
+            // Копируем день-в-день
+            const srcDay = srcData.find(sd => sd.date.endsWith(`-${String(d).padStart(2,'0')}`));
             let newDay;
-            if (srcDay) {
+            if (srcDay && srcDay.status === 'РАБОЧИЙ' && !fixedDays.includes(dayOfWeek)) {
                 newDay = getWorkDay(dateStr, wd, sets, fixedDays);
                 if (newDay.status !== 'РАБОЧИЙ') newDay = getEmptyDay(dateStr, wd);
             } else {
