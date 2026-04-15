@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.5, user-scalable=yes">
-    <title>🚀 WorkShift Pro | Исправленная версия 3.0</title>
+    <title>🚀 WorkShift Pro | Исправленная версия 3.3</title>
     <!-- Chart.js -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
     <!-- Font Awesome -->
@@ -11,7 +11,7 @@
     <!-- Google Fonts -->
     <link href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,400;14..32,500;14..32,600;14..32,700&display=swap" rel="stylesheet">
     <style>
-        /* ----- CSS переменные для тем ----- */
+        /* ----- CSS переменные для тем (без изменений) ----- */
         * { margin: 0; padding: 0; box-sizing: border-box; }
         :root {
             --bg-primary: #0b1120;
@@ -240,6 +240,7 @@
         }
         .settings-row label { width: 60px; }
         .settings-row input { flex: 1; }
+        input:disabled, select:disabled { opacity: 0.6; cursor: not-allowed; }
     </style>
 </head>
 <body>
@@ -252,7 +253,7 @@
         <!-- Шапка -->
         <div style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 16px;">
             <div>
-                <h1>👥 WorkShift Pro <span class="badge-law">Исправленная версия 3.0</span></h1>
+                <h1>👥 WorkShift Pro <span class="badge-law">Исправленная версия 3.3</span></h1>
                 <div class="subtitle">Суммированный учёт • Смена ≤12ч • Фикс.выходные • Автопокрытие • 42ч отдых</div>
             </div>
             <div style="display: flex; gap: 12px; align-items: center;">
@@ -418,7 +419,7 @@
     <div class="modal" id="confirmModal">
         <div class="modal-content" style="width: 400px;">
             <div class="modal-header"><span id="confirmTitle">Подтверждение</span><span class="modal-close" id="closeConfirmModalBtn">&times;</span></div>
-            <div style="margin-bottom: 24px;" id="confirmMessage">Вы уверены?</div>
+            <div style="margin-bottom: 24px; white-space: pre-line;" id="confirmMessage">Вы уверены?</div>
             <div class="form-actions">
                 <button class="btn" id="confirmCancelBtn">Отмена</button>
                 <button class="btn btn-danger" id="confirmOkBtn">Да</button>
@@ -445,6 +446,7 @@
 
     // ---------- Утилиты для работы с датами ----------
     function formatYMD(year, month, day) {
+        // month: 0-11
         return `${year}-${String(month+1).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
     }
 
@@ -495,7 +497,10 @@
         return h + m/60;
     }
 
-    function getMonthKey(y, m) { return `${y}-${String(m+1).padStart(2,'0')}`; }
+    // Ключ месяца: год + индекс месяца (0-11)
+    function getMonthKey(y, monthIndex) {
+        return `${y}-${String(monthIndex+1).padStart(2,'0')}`;
+    }
 
     function getWorkDaysInMonth(year, month) {
         const daysInMonth = new Date(year, month+1, 0).getDate();
@@ -516,7 +521,7 @@
         return norm;
     }
 
-    // ---------- Хранилище (IndexedDB + fallback) ----------
+    // ---------- Хранилище (IndexedDB + fallback) ИСПРАВЛЕНО ----------
     class StorageManager {
         constructor() {
             this.db = null;
@@ -526,7 +531,7 @@
         async init() {
             if (!window.indexedDB) return false;
             return new Promise((resolve) => {
-                const request = indexedDB.open('WorkShiftDB', 3);
+                const request = indexedDB.open('WorkShiftDB', 4);
                 request.onupgradeneeded = (e) => {
                     const db = e.target.result;
                     if (!db.objectStoreNames.contains('employees')) db.createObjectStore('employees', { keyPath: 'id' });
@@ -563,20 +568,35 @@
                     const tx = this.db.transaction(storeName, 'readwrite');
                     const store = tx.objectStore(storeName);
                     if (storeName === 'employees') {
-                        const clearReq = store.clear();
-                        clearReq.onsuccess = () => {
+                        // Исправлено: атомарное обновление без clear
+                        const getAllReq = store.getAll();
+                        getAllReq.onsuccess = () => {
+                            const existing = getAllReq.result;
+                            const toDelete = existing.filter(e => !value.some(v => v.id === e.id));
+                            toDelete.forEach(e => store.delete(e.id));
                             let count = value.length;
+                            if (count === 0) { resolve(); return; }
+                            let errorOccurred = false;
                             value.forEach(v => {
                                 const putReq = store.put(v);
-                                putReq.onsuccess = () => { count--; if (count === 0) resolve(); };
-                                putReq.onerror = (e) => reject(e.target.error);
+                                putReq.onsuccess = () => {
+                                    count--;
+                                    if (count === 0 && !errorOccurred) resolve();
+                                };
+                                putReq.onerror = (e) => {
+                                    if (!errorOccurred) {
+                                        errorOccurred = true;
+                                        tx.abort();
+                                        reject(e.target.error);
+                                    }
+                                };
                             });
-                            if (count === 0) resolve();
                         };
+                        getAllReq.onerror = (e) => reject(e.target.error);
                     } else {
-                        store.put(value, key || 'data');
-                        tx.oncomplete = () => resolve();
-                        tx.onerror = (e) => reject(e.target.error);
+                        const req = store.put(value, key || 'data');
+                        req.onsuccess = () => resolve();
+                        req.onerror = (e) => reject(e.target.error);
                     }
                 });
             } else {
@@ -610,7 +630,7 @@
     // ---------- Глобальные переменные ----------
     let employees = [];
     let shiftsData = {};
-    let currentYear = 2026, currentMonth = 3;
+    let currentYear = 2026, currentMonth = 3; // 0-based: 3 = Апрель
     let selectedEmployeeId = null;
     let chartInstance = null;
     let editingDate = null;
@@ -660,25 +680,28 @@
         return emp?.fixedDaysOff || [];
     }
 
-    function getEmptyDay(date, wd) {
+    function getEmptyDay(date) {
+        const dt = parseYMD(date);
+        const wd = getWeekdayIndex(dt);
         return { date, weekday: WEEKDAYS[wd], status: 'Выходной', start: '', end: '', break: 0, originalStatus: (isWeekend(date)||isHoliday(date)) ? 'Выходной' : 'РАБОЧИЙ' };
     }
 
-    function getWorkDay(date, wd, settings, fixedDaysOff = []) {
+    function getWorkDay(date, settings, fixedDaysOff = []) {
         const dt = parseYMD(date);
+        const wd = getWeekdayIndex(dt);
         const dayOfWeek = dt.getDay() === 0 ? 7 : dt.getDay();
         if (fixedDaysOff.includes(dayOfWeek)) {
-            return getEmptyDay(date, wd);
+            return getEmptyDay(date);
         }
         let end = settings.endTime;
         let isPre = isPreHoliday(date);
         if (isPre) {
             const adjusted = adjustPreHolidayEnd(settings.startTime, settings.endTime, settings.breakHours);
-            if (!adjusted) return { ...getEmptyDay(date, wd), status: 'ПРЕДПРАЗДНИК' };
+            if (!adjusted) return getEmptyDay(date);
             end = adjusted;
         }
         if (isShiftTooLong(settings.startTime, end, settings.breakHours, date)) {
-            return getEmptyDay(date, wd);
+            return getEmptyDay(date);
         }
         return {
             date, weekday: WEEKDAYS[wd], status: 'РАБОЧИЙ',
@@ -697,44 +720,46 @@
         return hours > 12;
     }
 
-    // ВАЖНОЕ ИСПРАВЛЕНИЕ: проверка существования месяца без создания нового
-    function hasMonthData(empId, y, m) {
+    function hasMonthData(empId, y, monthIdx) {
         if (!shiftsData[empId]) return false;
-        const key = getMonthKey(y, m);
+        const key = getMonthKey(y, monthIdx);
         return !!shiftsData[empId][key];
     }
 
-    function getMonthData(empId, y, m) {
+    function getMonthData(empId, y, monthIdx) {
+        if (!employees.some(e => e.id === empId)) return [];
         if (!shiftsData[empId]) shiftsData[empId] = {};
-        const key = getMonthKey(y, m);
+        const key = getMonthKey(y, monthIdx);
         if (!shiftsData[empId][key]) {
-            const daysInMonth = new Date(y, m+1, 0).getDate();
+            const daysInMonth = new Date(y, monthIdx+1, 0).getDate();
             const data = [];
             const sets = getEmployeeSettings(empId);
             const fixedDays = getEmployeeFixedDaysOff(empId);
             for (let d=1; d<=daysInMonth; d++) {
-                const dt = new Date(y, m, d);
-                const dateStr = formatYMD(y, m, d);
-                const wd = getWeekdayIndex(dt);
+                const dt = new Date(y, monthIdx, d);
+                const dateStr = formatYMD(y, monthIdx, d);
                 const isWkndOrHoliday = isWeekend(dateStr) || isHoliday(dateStr);
-                data.push(isWkndOrHoliday ? getEmptyDay(dateStr, wd) : getWorkDay(dateStr, wd, sets, fixedDays));
+                data.push(isWkndOrHoliday ? getEmptyDay(dateStr) : getWorkDay(dateStr, sets, fixedDays));
             }
             shiftsData[empId][key] = data;
         }
         return shiftsData[empId][key];
     }
 
-    // Получение дня только если месяц существует (без автосоздания)
     function getDayIfExists(empId, dateStr) {
         const [y,m,d] = dateStr.split('-').map(Number);
-        if (!hasMonthData(empId, y, m-1)) return null;
-        const data = shiftsData[empId][getMonthKey(y, m-1)];
+        const monthIdx = m-1;
+        if (!hasMonthData(empId, y, monthIdx)) {
+            // автоматически создаём месяц, чтобы форма не была пустой
+            getMonthData(empId, y, monthIdx);
+        }
+        const data = shiftsData[empId][getMonthKey(y, monthIdx)];
         return data.find(dd => dd.date === dateStr);
     }
 
-    function saveMonthData(empId, y, m, data) {
+    function saveMonthData(empId, y, monthIdx, data) {
         if (!shiftsData[empId]) shiftsData[empId] = {};
-        shiftsData[empId][getMonthKey(y, m)] = data;
+        shiftsData[empId][getMonthKey(y, monthIdx)] = data;
         autoSave();
     }
 
@@ -822,7 +847,6 @@
                     <button class="btn-icon delete-emp" data-id="${emp.id}" title="Удалить"><i class="fas fa-trash-alt"></i></button>
                 </div>
             `;
-            // ИСПРАВЛЕНИЕ: Drag только этого сотрудника
             card.addEventListener('dragstart', e => {
                 e.dataTransfer.setData('text/plain', emp.id);
                 card.classList.add('dragging');
@@ -933,26 +957,26 @@
 
     // ---------- Календарь: рендер ----------
     function renderCalendar() {
-        const y = currentYear, m = currentMonth;
-        const firstDay = new Date(y, m, 1);
+        const y = currentYear, monthIdx = currentMonth;
+        const firstDay = new Date(y, monthIdx, 1);
         const startWd = getWeekdayIndex(firstDay);
-        const daysInMonth = new Date(y, m+1, 0).getDate();
-        const lastDayPrevMonth = new Date(y, m, 0).getDate();
+        const daysInMonth = new Date(y, monthIdx+1, 0).getDate();
+        const lastDayPrevMonth = new Date(y, monthIdx, 0).getDate();
         const selectedEmps = employees.filter(e=>e.selected);
         
         let gridHtml = '';
         for (let i=0; i<startWd; i++) {
-            const prevDate = new Date(y, m-1, lastDayPrevMonth - startWd + i + 1);
+            const prevDate = new Date(y, monthIdx-1, lastDayPrevMonth - startWd + i + 1);
             const dateStr = formatYMD(prevDate.getFullYear(), prevDate.getMonth(), prevDate.getDate());
             gridHtml += `<div class="calendar-cell other-month" data-date="${dateStr}"><div class="cell-date">${prevDate.getDate()}</div><div style="color:var(--text-secondary);font-size:0.7rem;">—</div></div>`;
         }
         for (let d=1; d<=daysInMonth; d++) {
-            const dt = new Date(y, m, d);
-            const dateStr = formatYMD(y, m, d);
+            const dt = new Date(y, monthIdx, d);
+            const dateStr = formatYMD(y, monthIdx, d);
             let shiftsHtml = '';
             let shiftCount = 0;
             selectedEmps.forEach(emp => {
-                const data = getMonthData(emp.id, y, m);
+                const data = getMonthData(emp.id, y, monthIdx);
                 const day = data.find(dd=>dd.date===dateStr);
                 if (day && day.status === 'РАБОЧИЙ') {
                     shiftCount++;
@@ -970,7 +994,7 @@
         const totalCells = startWd + daysInMonth;
         const remaining = 42 - totalCells;
         for (let i=1; i<=remaining; i++) {
-            const nextDate = new Date(y, m+1, i);
+            const nextDate = new Date(y, monthIdx+1, i);
             const dateStr = formatYMD(nextDate.getFullYear(), nextDate.getMonth(), nextDate.getDate());
             gridHtml += `<div class="calendar-cell other-month" data-date="${dateStr}"><div class="cell-date">${i}</div><div style="color:var(--text-secondary);font-size:0.7rem;">—</div></div>`;
         }
@@ -978,12 +1002,12 @@
         
         let mobileHtml = '';
         for (let d=1; d<=daysInMonth; d++) {
-            const dt = new Date(y, m, d);
-            const dateStr = formatYMD(y, m, d);
+            const dt = new Date(y, monthIdx, d);
+            const dateStr = formatYMD(y, monthIdx, d);
             const wdName = WEEKDAYS[getWeekdayIndex(dt)];
             let shiftsHtml = '';
             selectedEmps.forEach(emp => {
-                const data = getMonthData(emp.id, y, m);
+                const data = getMonthData(emp.id, y, monthIdx);
                 const day = data.find(dd=>dd.date===dateStr);
                 if (day) {
                     if (day.status === 'РАБОЧИЙ') {
@@ -1000,7 +1024,7 @@
             </div>`;
         }
         mobileCalendarEl.innerHTML = mobileHtml;
-        periodInfo.innerText = `${MONTH_NAMES[m]} ${y}`;
+        periodInfo.innerText = `${MONTH_NAMES[monthIdx]} ${y}`;
         
         if (!calendarEl._hasListener) {
             calendarEl.addEventListener('click', handleCalendarClick);
@@ -1067,9 +1091,9 @@
         if (s > e) [s, e] = [e, s];
         const dates = [];
         for (let d = new Date(s); d <= e; d.setDate(d.getDate()+1)) {
-            const y = d.getFullYear(), m = d.getMonth(), day = d.getDate();
-            if (y === currentYear && m === currentMonth) {
-                dates.push(formatYMD(y, m, day));
+            const y = d.getFullYear(), monthIdx = d.getMonth(), day = d.getDate();
+            if (y === currentYear && monthIdx === currentMonth) {
+                dates.push(formatYMD(y, monthIdx, day));
             }
         }
         return dates;
@@ -1083,18 +1107,19 @@
 
     function handleDropOnCalendar(e) {
         e.preventDefault();
-        // Убираем drag-over со всех ячеек
         document.querySelectorAll('.calendar-cell').forEach(c => c.classList.remove('drag-over'));
         const cell = e.target.closest('.calendar-cell[data-date]');
         if (!cell) return;
         const dateStr = cell.dataset.date;
         const [y,m] = dateStr.split('-').map(Number);
-        if (m-1 !== currentMonth || y !== currentYear) return;
+        if (m-1 !== currentMonth || y !== currentYear) {
+            showToast('Нельзя назначить смену за пределами текущего месяца', 'warning');
+            return;
+        }
         const empId = e.dataTransfer.getData('text/plain');
         if (empId) assignShiftToEmployee(empId, dateStr);
     }
 
-    // Проверка межсменного отдыха (использует только существующие месяцы)
     function checkRestViolation(empId, dateStr, startTime, endTime) {
         const prevWork = getPrevWorkDay(empId, dateStr);
         const nextWork = getNextWorkDay(empId, dateStr);
@@ -1130,19 +1155,20 @@
         const dt = parseYMD(dateStr);
         const dayOfWeek = dt.getDay() === 0 ? 7 : dt.getDay();
         if (emp.fixedDaysOff.includes(dayOfWeek)) {
-            // Используем кастомное подтверждение вместо window.confirm
             showConfirm('Фиксированный выходной', `У сотрудника ${emp.name} фиксированный выходной. Всё равно назначить рабочую смену?`, () => {
-                performShiftAssignment(empId, dateStr, true);
+                performShiftAssignment(empId, dateStr);
             });
             return;
         }
-        performShiftAssignment(empId, dateStr, false);
+        performShiftAssignment(empId, dateStr);
     }
 
-    function performShiftAssignment(empId, dateStr, force) {
+    function performShiftAssignment(empId, dateStr) {
         const emp = employees.find(e => e.id === empId);
+        if (!emp) return;
         const [y, m] = dateStr.split('-').map(Number);
-        const data = getMonthData(empId, y, m-1);
+        const monthIdx = m-1;
+        const data = getMonthData(empId, y, monthIdx);
         const day = data.find(d => d.date === dateStr);
         if (day) {
             const sets = getEmployeeSettings(empId);
@@ -1161,22 +1187,28 @@
                 showToast(`Смена >12ч`, 'error');
                 return;
             }
-            // Проверка отдыха
             const restError = checkRestViolation(empId, dateStr, start, end);
             if (restError) {
-                showToast(restError, 'warning');
+                showConfirm('Нарушение отдыха', `${restError}. Всё равно назначить?`, () => {
+                    applyShiftAssignment(day, emp, dateStr, start, end, breakH, monthIdx);
+                });
+                return;
             }
-            
-            day.status = 'РАБОЧИЙ';
-            day.start = start;
-            day.end = end;
-            day.break = breakH;
-            day.originalStatus = (isWeekend(dateStr) || isHoliday(dateStr)) ? 'Выходной' : 'РАБОЧИЙ';
-            saveMonthData(empId, y, m-1, data);
-            renderCalendar();
-            if (empId === selectedEmployeeId) updateUIForSelected();
-            showToast(`Смена: ${emp.name}`, 'success');
+            applyShiftAssignment(day, emp, dateStr, start, end, breakH, monthIdx);
         }
+    }
+    
+    function applyShiftAssignment(day, emp, dateStr, start, end, breakH, monthIdx) {
+        day.status = 'РАБОЧИЙ';
+        day.start = start;
+        day.end = end;
+        day.break = breakH;
+        day.originalStatus = (isWeekend(dateStr) || isHoliday(dateStr)) ? 'Выходной' : 'РАБОЧИЙ';
+        const [y] = dateStr.split('-').map(Number);
+        saveMonthData(emp.id, y, monthIdx, shiftsData[emp.id][getMonthKey(y, monthIdx)]);
+        renderCalendar();
+        if (emp.id === selectedEmployeeId) updateUIForSelected();
+        showToast(`Смена: ${emp.name}`, 'success');
     }
 
     // ---------- Редактирование дня ----------
@@ -1204,20 +1236,34 @@
     }
 
     function loadDayToForm(empId, dateStr) {
-        const [y, m] = dateStr.split('-').map(Number);
-        const data = getMonthData(empId, y, m-1);
-        const day = data.find(d => d.date === dateStr);
+        const day = getDayIfExists(empId, dateStr);
+        const isPre = isPreHoliday(dateStr);
+        const preWarn = document.getElementById('preHolidayWarning');
+        preWarn.style.display = isPre ? 'block' : 'none';
+        if (isPre) preWarn.innerText = '⚠️ Предпраздничный день — смена сокращается на 1 час.';
+        
         if (day) {
-            document.getElementById('editStatus').value = day.status === 'ПРЕДПРАЗДНИК' ? 'Выходной' : day.status;
+            document.getElementById('editStatus').value = day.status;
             document.getElementById('editStart').value = day.start || '10:00';
             document.getElementById('editEnd').value = day.end || '22:00';
             document.getElementById('editBreak').value = day.break || 1;
+        } else {
+            document.getElementById('editStatus').value = 'Выходной';
+            document.getElementById('editStart').value = '10:00';
+            document.getElementById('editEnd').value = '22:00';
+            document.getElementById('editBreak').value = 1;
         }
-        const preWarn = document.getElementById('preHolidayWarning');
-        preWarn.style.display = isPreHoliday(dateStr) ? 'block' : 'none';
-        if (isPreHoliday(dateStr)) preWarn.innerText = '⚠️ Предпраздничный день — смена сокращается на 1 час.';
+        toggleTimeFields();
         checkMaxShift();
         checkTimeOrder();
+    }
+
+    function toggleTimeFields() {
+        const status = document.getElementById('editStatus').value;
+        const isWork = status === 'РАБОЧИЙ';
+        document.getElementById('editStart').disabled = !isWork;
+        document.getElementById('editEnd').disabled = !isWork;
+        document.getElementById('editBreak').disabled = !isWork;
     }
 
     function checkMaxShift() {
@@ -1254,10 +1300,10 @@
         }
     }
 
+    document.getElementById('editStatus').addEventListener('change', toggleTimeFields);
     document.getElementById('editStart').addEventListener('change', () => { checkMaxShift(); checkTimeOrder(); });
     document.getElementById('editEnd').addEventListener('change', () => { checkMaxShift(); checkTimeOrder(); });
     document.getElementById('editBreak').addEventListener('change', checkMaxShift);
-    document.getElementById('editStatus').addEventListener('change', checkMaxShift);
 
     document.getElementById('saveModalBtn').onclick = () => {
         if (!editingDate) return;
@@ -1277,35 +1323,70 @@
     function saveEditModal() {
         const empId = document.getElementById('editEmpSelect').value;
         const [y, m] = editingDate.split('-').map(Number);
-        const data = getMonthData(empId, y, m-1);
+        const monthIdx = m-1;
+        const data = getMonthData(empId, y, monthIdx);
         const day = data.find(d => d.date === editingDate);
         if (day) {
             const newStatus = document.getElementById('editStatus').value;
             if (newStatus === 'РАБОЧИЙ') {
-                const start = document.getElementById('editStart').value;
-                const end = document.getElementById('editEnd').value;
+                let start = document.getElementById('editStart').value;
+                let end = document.getElementById('editEnd').value;
                 const br = parseFloat(document.getElementById('editBreak').value)||1;
+                
+                // Проверка предпраздничного сокращения
+                if (isPreHoliday(editingDate)) {
+                    const adjusted = adjustPreHolidayEnd(start, end, br);
+                    if (!adjusted) {
+                        showToast('Сокращение до 0 часов', 'error');
+                        return;
+                    }
+                    end = adjusted;
+                }
+                
+                // Проверка на отрицательную длительность
+                let [sh,sm] = start.split(':').map(Number);
+                let [eh,em] = end.split(':').map(Number);
+                let startMins = sh*60+sm, endMins = eh*60+em;
+                if (endMins <= startMins) endMins += 24*60;
+                let duration = (endMins - startMins)/60 - br;
+                if (duration <= 0) {
+                    showToast('Некорректное время: окончание раньше начала или перерыв превышает длительность', 'error');
+                    return;
+                }
+                
                 if (isShiftTooLong(start, end, br, editingDate)) {
                     showToast('Смена >12 ч', 'error');
                     return;
                 }
                 const restError = checkRestViolation(empId, editingDate, start, end);
-                if (restError) showToast(restError, 'warning');
-                day.status = newStatus;
-                day.start = start;
-                day.end = end;
-                day.break = br;
+                if (restError) {
+                    showConfirm('Нарушение отдыха', `${restError}. Всё равно сохранить?`, () => {
+                        applyEditSave(day, start, end, br, monthIdx);
+                    });
+                    return;
+                }
+                applyEditSave(day, start, end, br, monthIdx);
             } else {
                 day.status = newStatus;
                 day.start = day.end = '';
                 day.break = 0;
+                day.originalStatus = (isWeekend(editingDate)||isHoliday(editingDate)) ? 'Выходной' : 'РАБОЧИЙ';
+                saveMonthData(empId, y, monthIdx, data);
             }
-            day.originalStatus = (isWeekend(editingDate)||isHoliday(editingDate)) ? 'Выходной' : 'РАБОЧИЙ';
-            saveMonthData(empId, y, m-1, data);
         }
         modal.style.display = 'none';
         renderCalendar();
         updateUIForSelected();
+    }
+    
+    function applyEditSave(day, start, end, br, monthIdx) {
+        day.status = 'РАБОЧИЙ';
+        day.start = start;
+        day.end = end;
+        day.break = br;
+        day.originalStatus = (isWeekend(editingDate)||isHoliday(editingDate)) ? 'Выходной' : 'РАБОЧИЙ';
+        const [y] = editingDate.split('-').map(Number);
+        saveMonthData(document.getElementById('editEmpSelect').value, y, monthIdx, shiftsData[document.getElementById('editEmpSelect').value][getMonthKey(y, monthIdx)]);
     }
 
     // ---------- Массовое редактирование ----------
@@ -1324,9 +1405,12 @@
         const emp = employees.find(e=>e.id===empId);
         const firstDate = Array.from(selectedDates)[0];
         const [y, m] = firstDate.split('-').map(Number);
-        const data = getMonthData(empId, y, m-1);
+        const monthIdx = m-1;
+        const data = getMonthData(empId, y, monthIdx);
         const sets = getEmployeeSettings(empId);
         const errors = [];
+        const restWarnings = [];
+        
         selectedDates.forEach(dateStr => {
             const day = data.find(d => d.date === dateStr);
             if (day) {
@@ -1350,19 +1434,34 @@
                         errors.push(`${dateStr}: >12ч`);
                         return;
                     }
+                    const restError = checkRestViolation(empId, dateStr, sets.startTime, end);
+                    if (restError) restWarnings.push(`${dateStr}: ${restError}`);
+                    
                     day.status = status;
                     day.start = sets.startTime;
                     day.end = end;
                     day.break = sets.breakHours;
+                    day.originalStatus = (isWeekend(dateStr)||isHoliday(dateStr)) ? 'Выходной' : 'РАБОЧИЙ';
                 } else {
                     day.status = status;
                     day.start = day.end = '';
                     day.break = 0;
+                    day.originalStatus = (isWeekend(dateStr)||isHoliday(dateStr)) ? 'Выходной' : 'РАБОЧИЙ';
                 }
-                day.originalStatus = (isWeekend(dateStr)||isHoliday(dateStr)) ? 'Выходной' : 'РАБОЧИЙ';
             }
         });
-        saveMonthData(empId, y, m-1, data);
+        
+        if (restWarnings.length > 0) {
+            showConfirm('Нарушения отдыха', restWarnings.join('\n') + '\n\nПродолжить?', () => {
+                finalizeBulkEdit(empId, y, monthIdx, data, errors);
+            });
+        } else {
+            finalizeBulkEdit(empId, y, monthIdx, data, errors);
+        }
+    }
+    
+    function finalizeBulkEdit(empId, y, monthIdx, data, errors) {
+        saveMonthData(empId, y, monthIdx, data);
         selectedDates.clear();
         bulkEditPanel.style.display = 'none';
         renderCalendar();
@@ -1370,7 +1469,7 @@
         if (errors.length) {
             showToast(`Пропущено: ${errors.join(', ')}`, 'warning');
         } else {
-            showToast(`Статус: ${status}`, 'success');
+            showToast(`Статус изменён`, 'success');
         }
     }
 
@@ -1383,6 +1482,8 @@
         let endMins = eh*60+em;
         if (endMins <= startMins) endMins += 24*60;
         const breakMins = (day.break||0)*60;
+        const totalWorkMins = endMins - startMins;
+        if (totalWorkMins <= 0) return {total:0, night:0, weekend:0};
         
         let nightMins = 0;
         const nightStart1 = 22*60, nightEnd1 = 24*60;
@@ -1399,7 +1500,6 @@
         if (o2e > o2s) nightMins += o2e - o2s;
         
         if (breakMins > 0 && nightMins > 0) {
-            const totalWorkMins = endMins - startMins;
             const nightRatio = nightMins / totalWorkMins;
             const breakNightMins = breakMins * nightRatio;
             nightMins = Math.max(0, nightMins - breakNightMins);
@@ -1415,10 +1515,10 @@
     }
 
     function getPrevWorkDay(empId, dateStr, maxLookback = 14) {
-        const dt = parseYMD(dateStr);
+        const checkDate = new Date(dateStr);
         for (let i=1; i<=maxLookback; i++) {
-            dt.setDate(dt.getDate() - 1);
-            const prevStr = formatYMD(dt.getFullYear(), dt.getMonth(), dt.getDate());
+            checkDate.setDate(checkDate.getDate() - 1);
+            const prevStr = formatYMD(checkDate.getFullYear(), checkDate.getMonth(), checkDate.getDate());
             const day = getDayIfExists(empId, prevStr);
             if (day && day.status === 'РАБОЧИЙ') return day;
         }
@@ -1426,10 +1526,10 @@
     }
 
     function getNextWorkDay(empId, dateStr, maxLookahead = 14) {
-        const dt = parseYMD(dateStr);
+        const checkDate = new Date(dateStr);
         for (let i=1; i<=maxLookahead; i++) {
-            dt.setDate(dt.getDate() + 1);
-            const nextStr = formatYMD(dt.getFullYear(), dt.getMonth(), dt.getDate());
+            checkDate.setDate(checkDate.getDate() + 1);
+            const nextStr = formatYMD(checkDate.getFullYear(), checkDate.getMonth(), checkDate.getDate());
             const day = getDayIfExists(empId, nextStr);
             if (day && day.status === 'РАБОЧИЙ') return day;
         }
@@ -1437,8 +1537,7 @@
     }
 
     function updateUIForSelected() {
-        const emp = employees.find(e=>e.id===selectedEmployeeId);
-        if (!emp) {
+        if (!selectedEmployeeId) {
             document.getElementById('kpiHours').innerText = '0';
             document.getElementById('kpiNight').innerText = '0';
             document.getElementById('kpiDays').innerText = '0';
@@ -1446,9 +1545,11 @@
             document.getElementById('salaryDisplay').innerText = '0 ₽';
             document.getElementById('kpiRest').innerHTML = '—';
             document.getElementById('complianceMessage').innerHTML = 'Нет данных';
-            if (chartInstance) chartInstance.destroy();
+            if (chartInstance) { chartInstance.destroy(); chartInstance = null; }
             return;
         }
+        const emp = employees.find(e=>e.id===selectedEmployeeId);
+        if (!emp) return;
         const data = getMonthData(emp.id, currentYear, currentMonth);
         let workDays=0, totalH=0, nightH=0, weekendH=0;
         data.forEach(d => {
@@ -1492,14 +1593,14 @@
             options: { responsive: true, maintainAspectRatio: true, plugins: { legend: { display: false } } }
         });
         
-        // Проверка отдыха только по существующим месяцам
+        // Проверка 42-часового отдыха по блокам
         const allDays = [];
         [-1, 0, 1].forEach(offset => {
-            let y = currentYear, m = currentMonth + offset;
-            if (m < 0) { m = 11; y--; }
-            if (m > 11) { m = 0; y++; }
-            if (hasMonthData(emp.id, y, m)) {
-                allDays.push(...shiftsData[emp.id][getMonthKey(y, m)]);
+            let y = currentYear, mIdx = currentMonth + offset;
+            if (mIdx < 0) { mIdx = 11; y--; }
+            if (mIdx > 11) { mIdx = 0; y++; }
+            if (hasMonthData(emp.id, y, mIdx)) {
+                allDays.push(...shiftsData[emp.id][getMonthKey(y, mIdx)]);
             }
         });
         let warnings = [], blocks = [], cur = [];
@@ -1587,7 +1688,14 @@
         renderCalendar();
     };
     document.getElementById('saveBtn').onclick = () => saveAll();
-    document.getElementById('exportFullBtn').onclick = () => { showLoading(true); exportFullData(); showLoading(false); };
+    document.getElementById('exportFullBtn').onclick = async () => { 
+        showLoading(true); 
+        try {
+            exportFullData();
+        } finally {
+            showLoading(false);
+        }
+    };
     document.getElementById('importFullBtn').onclick = () => document.getElementById('importFullFile').click();
     document.getElementById('copyMonthBtn').onclick = copyMonthToNext;
     document.getElementById('resetMonthBtn').onclick = resetMonth;
@@ -1610,13 +1718,12 @@
             for (let d=1; d<=daysInMonth; d++) {
                 const dt = new Date(currentYear, currentMonth, d);
                 const dateStr = formatYMD(currentYear, currentMonth, d);
-                const wd = getWeekdayIndex(dt);
                 const dayOfWeek = dt.getDay() === 0 ? 7 : dt.getDay();
                 let day;
                 if (isWork && !fixedDays.includes(dayOfWeek)) {
-                    day = getWorkDay(dateStr, wd, sets, fixedDays);
+                    day = getWorkDay(dateStr, sets, fixedDays);
                 } else {
-                    day = getEmptyDay(dateStr, wd);
+                    day = getEmptyDay(dateStr);
                 }
                 phase++;
                 if ((isWork && phase >= work) || (!isWork && phase >= off)) {
@@ -1646,83 +1753,81 @@
         const daysInMonth = new Date(currentYear, currentMonth+1, 0).getDate();
         selected.sort((a,b) => (b.priority||5) - (a.priority||5));
         
-        showConfirm('Автопокрытие', `Распределить смены?`, () => {
-            const errorMessages = [];
-            selected.forEach((emp, idx) => {
-                const sets = getEmployeeSettings(emp.id);
-                const fixed = emp.fixedDaysOff || [];
-                const shift = (idx * work + (10 - (emp.priority||5))) % cycle;
-                const data = [];
-                for (let d=1; d<=daysInMonth; d++) {
-                    const dt = new Date(currentYear, currentMonth, d);
-                    const dateStr = formatYMD(currentYear, currentMonth, d);
-                    const wd = getWeekdayIndex(dt);
-                    const dayOfWeek = dt.getDay() === 0 ? 7 : dt.getDay();
-                    const isFixedOff = fixed.includes(dayOfWeek);
-                    const dayInCycle = (d - 1 + shift) % cycle;
-                    let isWork = dayInCycle < work && !isFixedOff;
-                    let day;
-                    if (isWork) {
-                        day = getWorkDay(dateStr, wd, sets, fixed);
-                        if (day.status !== 'РАБОЧИЙ') errorMessages.push(`${emp.name}: ${dateStr} пропущен`);
-                    } else {
-                        day = getEmptyDay(dateStr, wd);
-                    }
-                    data.push(day);
-                }
-                saveMonthData(emp.id, currentYear, currentMonth, data);
-            });
-            
-            // Заполнение пустых дней с проверкой отдыха
-            const coverage = new Array(daysInMonth).fill(0);
+        const monthDataCache = {};
+        const errorMessages = [];
+        
+        selected.forEach((emp, idx) => {
+            const sets = getEmployeeSettings(emp.id);
+            const fixed = emp.fixedDaysOff || [];
+            const shift = (idx * work + (10 - (emp.priority||5))) % cycle;
+            const data = [];
             for (let d=1; d<=daysInMonth; d++) {
+                const dt = new Date(currentYear, currentMonth, d);
                 const dateStr = formatYMD(currentYear, currentMonth, d);
-                selected.forEach(emp => {
-                    const monthData = getMonthData(emp.id, currentYear, currentMonth);
-                    const day = monthData.find(dd => dd.date === dateStr);
-                    if (day && day.status === 'РАБОЧИЙ') coverage[d-1]++;
-                });
-            }
-            const emptyDays = [];
-            for (let d=0; d<daysInMonth; d++) if (coverage[d] === 0) emptyDays.push(d+1);
-            
-            emptyDays.forEach(dayNum => {
-                const dateStr = formatYMD(currentYear, currentMonth, dayNum);
-                const dt = new Date(currentYear, currentMonth, dayNum);
                 const dayOfWeek = dt.getDay() === 0 ? 7 : dt.getDay();
-                const wd = getWeekdayIndex(dt);
-                const candidates = selected.filter(emp => {
-                    if (emp.fixedDaysOff.includes(dayOfWeek)) return false;
-                    const sets = getEmployeeSettings(emp.id);
-                    const day = getWorkDay(dateStr, wd, sets, emp.fixedDaysOff);
-                    return day.status === 'РАБОЧИЙ';
-                }).filter(emp => {
-                    const sets = getEmployeeSettings(emp.id);
-                    const restError = checkRestViolation(emp.id, dateStr, sets.startTime, sets.endTime);
-                    return !restError;
-                }).sort((a,b) => {
-                    const hoursA = getMonthData(a.id, currentYear, currentMonth).reduce((sum, d) => sum + (d.status==='РАБОЧИЙ'?calcHours(d).total:0), 0);
-                    const hoursB = getMonthData(b.id, currentYear, currentMonth).reduce((sum, d) => sum + (d.status==='РАБОЧИЙ'?calcHours(d).total:0), 0);
-                    return hoursA - hoursB;
-                });
-                if (candidates.length > 0) {
-                    const emp = candidates[0];
-                    const monthData = getMonthData(emp.id, currentYear, currentMonth);
-                    const day = monthData.find(dd => dd.date === dateStr);
-                    if (day) {
-                        const sets = getEmployeeSettings(emp.id);
-                        const newDay = getWorkDay(dateStr, wd, sets, emp.fixedDaysOff);
-                        Object.assign(day, newDay);
-                        saveMonthData(emp.id, currentYear, currentMonth, monthData);
-                    }
+                const isFixedOff = fixed.includes(dayOfWeek);
+                const dayInCycle = (d - 1 + shift) % cycle;
+                let isWork = dayInCycle < work && !isFixedOff;
+                let day;
+                if (isWork) {
+                    day = getWorkDay(dateStr, sets, fixed);
+                    if (day.status !== 'РАБОЧИЙ') errorMessages.push(`${emp.name}: ${dateStr} пропущен`);
+                } else {
+                    day = getEmptyDay(dateStr);
                 }
-            });
-            
-            renderCalendar();
-            updateUIForSelected();
-            if (errorMessages.length) showToast(`Предупреждения: ${errorMessages.join('; ')}`, 'warning');
-            else showToast('Графики распределены', 'success');
+                data.push(day);
+            }
+            monthDataCache[emp.id] = data;
         });
+        
+        const coverage = new Array(daysInMonth).fill(0);
+        for (let d=1; d<=daysInMonth; d++) {
+            const dateStr = formatYMD(currentYear, currentMonth, d);
+            selected.forEach(emp => {
+                const day = monthDataCache[emp.id]?.find(dd => dd.date === dateStr);
+                if (day && day.status === 'РАБОЧИЙ') coverage[d-1]++;
+            });
+        }
+        const emptyDays = [];
+        for (let d=0; d<daysInMonth; d++) if (coverage[d] === 0) emptyDays.push(d+1);
+        
+        emptyDays.forEach(dayNum => {
+            const dateStr = formatYMD(currentYear, currentMonth, dayNum);
+            const dt = new Date(currentYear, currentMonth, dayNum);
+            const dayOfWeek = dt.getDay() === 0 ? 7 : dt.getDay();
+            const candidates = selected.filter(emp => {
+                if (emp.fixedDaysOff.includes(dayOfWeek)) return false;
+                const sets = getEmployeeSettings(emp.id);
+                const day = getWorkDay(dateStr, sets, emp.fixedDaysOff);
+                return day.status === 'РАБОЧИЙ';
+            }).filter(emp => {
+                const sets = getEmployeeSettings(emp.id);
+                const restError = checkRestViolation(emp.id, dateStr, sets.startTime, sets.endTime);
+                return !restError;
+            }).sort((a,b) => {
+                const hoursA = monthDataCache[a.id].reduce((sum, d) => sum + (d.status==='РАБОЧИЙ'?calcHours(d).total:0), 0);
+                const hoursB = monthDataCache[b.id].reduce((sum, d) => sum + (d.status==='РАБОЧИЙ'?calcHours(d).total:0), 0);
+                return hoursA - hoursB;
+            });
+            if (candidates.length > 0) {
+                const emp = candidates[0];
+                const day = monthDataCache[emp.id].find(dd => dd.date === dateStr);
+                if (day) {
+                    const sets = getEmployeeSettings(emp.id);
+                    const newDay = getWorkDay(dateStr, sets, emp.fixedDaysOff);
+                    Object.assign(day, newDay);
+                }
+            }
+        });
+        
+        for (const [empId, data] of Object.entries(monthDataCache)) {
+            saveMonthData(empId, currentYear, currentMonth, data);
+        }
+        
+        renderCalendar();
+        updateUIForSelected();
+        if (errorMessages.length) showToast(`Предупреждения: ${errorMessages.join('; ')}`, 'warning');
+        else showToast('Графики распределены', 'success');
     }
 
     function copyMonthToNext() {
@@ -1738,21 +1843,25 @@
         for (let d=1; d<=daysInNext; d++) {
             const dt = new Date(nextYear, nextMonth, d);
             const dateStr = formatYMD(nextYear, nextMonth, d);
-            const wd = getWeekdayIndex(dt);
             const dayOfWeek = dt.getDay() === 0 ? 7 : dt.getDay();
-            // Копируем день-в-день
-            const srcDay = srcData.find(sd => sd.date.endsWith(`-${String(d).padStart(2,'0')}`));
+            // Исправлено: копируем по номеру дня, а не по дате
+            const srcDay = srcData.length >= d ? srcData[d-1] : null;
             let newDay;
             if (srcDay && srcDay.status === 'РАБОЧИЙ' && !fixedDays.includes(dayOfWeek)) {
-                newDay = getWorkDay(dateStr, wd, sets, fixedDays);
-                if (newDay.status !== 'РАБОЧИЙ') newDay = getEmptyDay(dateStr, wd);
+                newDay = getWorkDay(dateStr, sets, fixedDays);
+                if (newDay.status !== 'РАБОЧИЙ') newDay = getEmptyDay(dateStr);
             } else {
-                newDay = getEmptyDay(dateStr, wd);
+                newDay = getEmptyDay(dateStr);
             }
             newData.push(newDay);
         }
         saveMonthData(selectedEmployeeId, nextYear, nextMonth, newData);
         showToast('Месяц скопирован', 'success');
+        currentMonth = nextMonth;
+        currentYear = nextYear;
+        syncMonthYearUI();
+        renderCalendar();
+        updateUIForSelected();
     }
 
     function resetMonth() {
@@ -1763,12 +1872,10 @@
             const data = [];
             const daysInMonth = new Date(currentYear, currentMonth+1, 0).getDate();
             const emp = employees.find(e=>e.id===selectedEmployeeId);
-            const fixedDays = emp.fixedDaysOff;
             for (let d=1; d<=daysInMonth; d++) {
                 const dt = new Date(currentYear, currentMonth, d);
                 const dateStr = formatYMD(currentYear, currentMonth, d);
-                const wd = getWeekdayIndex(dt);
-                data.push(getEmptyDay(dateStr, wd));
+                data.push(getEmptyDay(dateStr));
             }
             saveMonthData(selectedEmployeeId, currentYear, currentMonth, data);
             renderCalendar();
@@ -1807,6 +1914,8 @@
                 shiftsData = imported.shifts;
                 await saveAll();
                 selectedEmployeeId = employees.length ? employees[0].id : null;
+                selectedDates.clear();
+                bulkEditPanel.style.display = 'none';
                 renderEmployees();
                 renderCalendar();
                 updateUIForSelected();
@@ -1841,26 +1950,26 @@
         if (!selectedEmployeeId) return;
         showConfirm('Применить ко всем', 'Применить настройки ко всем рабочим дням месяца?', () => {
             const sets = getEmployeeSettings(selectedEmployeeId);
-            const data = getMonthData(selectedEmployeeId, currentYear, currentMonth);
             const emp = employees.find(e=>e.id===selectedEmployeeId);
             const fixedDays = emp.fixedDaysOff;
-            data.forEach(d => {
-                if (d.status === 'РАБОЧИЙ') {
-                    const dt = parseYMD(d.date);
-                    const wd = getWeekdayIndex(dt);
-                    const newDay = getWorkDay(d.date, wd, sets, fixedDays);
-                    if (newDay.status === 'РАБОЧИЙ') {
-                        d.start = newDay.start;
-                        d.end = newDay.end;
-                        d.break = newDay.break;
-                    } else {
-                        d.status = 'Выходной';
-                        d.start = d.end = '';
-                        d.break = 0;
-                    }
+            const data = getMonthData(selectedEmployeeId, currentYear, currentMonth);
+            // Полная перегенерация месяца
+            const newData = [];
+            const daysInMonth = new Date(currentYear, currentMonth+1, 0).getDate();
+            for (let d=1; d<=daysInMonth; d++) {
+                const dt = new Date(currentYear, currentMonth, d);
+                const dateStr = formatYMD(currentYear, currentMonth, d);
+                const oldDay = data.find(dd => dd.date === dateStr);
+                let newDay;
+                if (oldDay && oldDay.status === 'РАБОЧИЙ') {
+                    newDay = getWorkDay(dateStr, sets, fixedDays);
+                    if (newDay.status !== 'РАБОЧИЙ') newDay = getEmptyDay(dateStr);
+                } else {
+                    newDay = getEmptyDay(dateStr);
                 }
-            });
-            saveMonthData(selectedEmployeeId, currentYear, currentMonth, data);
+                newData.push(newDay);
+            }
+            saveMonthData(selectedEmployeeId, currentYear, currentMonth, newData);
             renderCalendar();
             updateUIForSelected();
             showToast('Настройки применены', 'success');
@@ -1896,10 +2005,13 @@
     });
 
     // Свайпы
-    let touchStartX = 0;
-    document.addEventListener('touchstart', e => { touchStartX = e.changedTouches[0].screenX; });
+    let touchStartX = 0, touchStartY = 0;
+    document.addEventListener('touchstart', e => { 
+        touchStartX = e.changedTouches[0].screenX; 
+        touchStartY = e.changedTouches[0].screenY; 
+    });
     document.addEventListener('touchend', e => {
-        if (Math.abs(e.changedTouches[0].screenY - touchStartX) > 20) return;
+        if (Math.abs(e.changedTouches[0].screenY - touchStartY) > 20) return;
         const diff = e.changedTouches[0].screenX - touchStartX;
         if (Math.abs(diff) > 80) changeMonth(diff > 0 ? -1 : 1);
     });
