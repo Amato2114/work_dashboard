@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="theme-color" content="#101827">
-<title>WorkShift Pro 5.2 — Workforce Control</title>
+<title>WorkShift Pro 5.3 — Workforce Control</title>
 <style>
 :root{color-scheme:dark;--bg:#0b1220;--panel:#121d2e;--panel2:#18263a;--line:#293a52;--text:#e8eef7;--muted:#9aabc1;--blue:#5795ff;--green:#35c795;--red:#f27676;--amber:#f4bd58;--violet:#9d8cff;--surface:#0e1929;--shadow:0 16px 40px #0005}
 *{box-sizing:border-box}body{margin:0;background:radial-gradient(ellipse at 15% -10%,#1b3150 0,transparent 38%),var(--bg);color:var(--text);font:14px/1.5 Inter,system-ui,Segoe UI,Arial,sans-serif}
@@ -33,7 +33,7 @@ footer{color:var(--muted);font-size:11px;padding:20px 0;text-align:center}
 </head>
 <body>
 <header>
- <div class="brand">◈ WorkShift Pro <small>5.2 · WORKFORCE CONTROL</small></div>
+ <div class="brand">◈ WorkShift Pro <small>5.3 · WORKFORCE CONTROL</small></div>
  <div class="header-actions">
   <span id="dbStatus" class="small muted">Инициализация хранилища…</span>
   <button id="backupBtn">Резервная копия</button>
@@ -110,9 +110,10 @@ footer{color:var(--muted);font-size:11px;padding:20px 0;text-align:center}
  <section id="tab-reports" class="hidden">
   <div class="panel-grid">
    <div class="card"><h2>Проверка расписания</h2><p class="small muted">Контроль обнаруживает потенциальные проблемы по заданным параметрам. Автоматическая проверка не заменяет юридическую экспертизу графика.</p><button class="primary" id="runChecks">Проверить график</button><div id="checks" style="margin-top:12px"></div></div>
-   <div class="card"><h2>Сводка за месяц</h2><div id="monthReport"></div><button id="exportCsv" style="margin-top:12px">Экспорт CSV</button></div>
+   <div class="card"><h2>Сводка за месяц</h2><label>Отчётный месяц</label><input type="month" id="reportMonth"><div id="monthReport"></div><div class="actions" style="margin-top:12px"><button id="exportCsv">Экспорт графика CSV</button><button id="exportLoadCsv">Экспорт нагрузки CSV</button></div></div>
   </div>
-  <div class="card" style="margin-top:14px"><div class="toolbar"><h2>Журнал действий</h2><button id="clearAudit" class="danger">Очистить журнал</button></div><div id="auditLog" class="small muted">История пока пуста</div></div>
+  <div class="card" style="margin-top:14px"><div class="toolbar"><h2>Нагрузка команды</h2><span class="small muted">Факт по запланированным сменам против недельной цели</span></div><div class="table-wrap"><table><thead><tr><th>Сотрудник</th><th>Смены</th><th>Часы</th><th>Цель за месяц*</th><th>Отклонение</th><th>Загрузка</th></tr></thead><tbody id="workloadTable"></tbody></table></div><p class="small muted">*Месячная цель рассчитывается пропорционально календарным дням: недельная цель × дни месяца / 7. Это управленческий ориентир, а не юридический расчёт нормы рабочего времени.</p></div>
+  <div class="card" style="margin-top:14px"><div class="toolbar"><h2>Журнал действий</h2><div class="actions"><button id="exportAudit">Экспорт журнала CSV</button><button id="clearAudit" class="danger">Очистить журнал</button></div></div><div id="auditLog" class="small muted">История пока пуста</div></div>
  </section>
  <section id="tab-settings" class="hidden">
   <div class="panel-grid">
@@ -130,7 +131,7 @@ footer{color:var(--muted);font-size:11px;padding:20px 0;text-align:center}
    </div>
   </div>
  </section>
- <footer>WorkShift Pro 5.2 · Workforce Control · IndexedDB · схема данных 3</footer>
+ <footer>WorkShift Pro 5.3 · Workforce Control · IndexedDB · схема данных 3</footer>
 </main>
 <dialog id="staffDialog">
  <h2 id="staffDialogTitle">Новый сотрудник</h2><form id="staffForm">
@@ -249,6 +250,8 @@ function checkIssues(){
   if(!employee(s.employeeId))issues.push({level:'error',text:`${s.date||'Без даты'}: запись связана с отсутствующим сотрудником`});
   if(!/^\d{4}-\d{2}-\d{2}$/.test(String(s.date||''))||(()=>{const d=parseDate(s.date);return Number.isNaN(d.getTime())||dateKey(d.getFullYear(),d.getMonth(),d.getDate())!==s.date})())issues.push({level:'error',text:`Некорректная дата записи: ${s.date||'не указана'}`});
   if(!validTypes.has(s.type))issues.push({level:'error',text:`${s.date||'Без даты'}: неизвестный тип записи`});
+  if(employee(s.employeeId)?.active===false)issues.push({level:'warning',text:`${s.date||'Без даты'}: смена назначена неактивному сотруднику ${employee(s.employeeId)?.name||''}`});
+  if(s.type==='work'){const validTime=v=>/^([01]\d|2[0-3]):[0-5]\d$/.test(String(v||''));if(!validTime(s.start)||!validTime(s.end))issues.push({level:'error',text:`${s.date||'Без даты'}: некорректное время начала или окончания`});else{const duration=(shiftInterval(s).end-shiftInterval(s).start)/3600000;if(duration>24||duration<=0)issues.push({level:'error',text:`${s.date}: недопустимая продолжительность смены`});if(Number(s.break||0)<0||Number(s.break||0)>=duration)issues.push({level:'error',text:`${s.date}: некорректная продолжительность перерыва`});if(Number(s.nightHours||0)<0||Number(s.nightHours||0)>hoursOf(s))issues.push({level:'error',text:`${s.date}: некорректное количество ночных часов`})}}
   if(seen.has(key))issues.push({level:'error',text:`${s.date}: у сотрудника несколько записей на один день`});
   seen.add(key);
  }
@@ -267,7 +270,12 @@ function clearPlan(){planDraft=[];$('planRows').innerHTML='<tr><td colspan="5">�
 function payrollFor(e,shifts){const work=shifts.filter(s=>s.employeeId===e.id&&s.type==='work'),hours=work.reduce((a,s)=>a+hoursOf(s),0),night=work.reduce((a,s)=>a+Math.min(s.nightHours||0,hoursOf(s)),0),base=hours*Number(e.rate||0),nightPay=night*Number(e.rate||0)*Number(state.settings.nightPct||0)/100,holidayHours=work.filter(s=>s.holiday).reduce((a,s)=>a+hoursOf(s),0),holidayPay=holidayHours*Number(e.rate||0)*Number(state.settings.holidayPct||0)/100,district=base*Number(state.settings.districtPct||0)/100,north=base*Number(state.settings.northPct||0)/100;return {hours,night,base,nightPay,holidayPay,district,north,total:base+nightPay+holidayPay+district+north}}
 function renderPayroll(){const month=$('payMonth').value||`${viewYear}-${String(viewMonth+1).padStart(2,'0')}`,shifts=state.shifts.filter(s=>s.date.startsWith(month)),list=$('payStaff').value==='all'?state.employees:state.employees.filter(e=>e.id===$('payStaff').value);let rows='',sum={hours:0,night:0,base:0,extra:0,total:0};for(const e of list){const p=payrollFor(e,shifts);sum.hours+=p.hours;sum.night+=p.night;sum.base+=p.base;sum.extra+=p.total-p.base;sum.total+=p.total;rows+=`<tr><td>${esc(e.name)}</td><td>${p.hours.toFixed(1)}</td><td>${p.night.toFixed(1)}</td><td>${money(p.base)}</td><td>${money(p.total-p.base)}</td><td><b>${money(p.total)}</b></td></tr>`}
 $('payTable').innerHTML=rows||'<tr><td colspan="6">Нет сотрудников</td></tr>';$('payResult').innerHTML=`<div class="kpi"><span>Часы</span><strong>${sum.hours.toFixed(1)}</strong></div><p>База: <b>${money(sum.base)}</b></p><p>Доплаты: <b>${money(sum.extra)}</b></p><h2>Итого: ${money(sum.total)}</h2>`}
-function renderReports(){const ms=monthShifts(),hours=ms.reduce((a,s)=>a+hoursOf(s),0);$('monthReport').innerHTML=`<p>Рабочих смен: <b>${ms.filter(s=>s.type==='work').length}</b></p><p>Всего часов: <b>${hours.toFixed(1)}</b></p><p>Отпускных дней: <b>${ms.filter(s=>s.type==='vacation').length}</b></p><p>Больничных дней: <b>${ms.filter(s=>s.type==='sick').length}</b></p>`}
+function reportMonth(){return $('reportMonth')?.value||`${viewYear}-${String(viewMonth+1).padStart(2,'0')}`}
+function monthReportShifts(){const month=reportMonth();return state.shifts.filter(s=>String(s.date||'').startsWith(month))}
+function workloadRows(){const month=reportMonth(),parts=month.split('-').map(Number),days=new Date(parts[0],parts[1],0).getDate(),shifts=monthReportShifts();return state.employees.map(e=>{const work=shifts.filter(s=>s.employeeId===e.id&&s.type==='work'),hours=work.reduce((n,s)=>n+hoursOf(s),0),target=Number(e.weeklyTarget||40)*days/7,delta=hours-target,load=target>0?hours/target*100:0;return {employee:e,shifts:work.length,hours,target,delta,load}}).sort((a,b)=>b.hours-a.hours)}
+function renderReports(){const ms=monthReportShifts(),hours=ms.reduce((a,s)=>a+hoursOf(s),0),work=ms.filter(s=>s.type==='work');$('monthReport').innerHTML=`<p>Рабочих смен: <b>${work.length}</b></p><p>Всего часов: <b>${hours.toFixed(1)}</b></p><p>Отпускных записей: <b>${ms.filter(s=>s.type==='vacation').length}</b></p><p>Больничных записей: <b>${ms.filter(s=>s.type==='sick').length}</b></p><p>Активных сотрудников с назначенными сменами: <b>${new Set(work.map(s=>s.employeeId)).size}</b></p>`;const rows=workloadRows();$('workloadTable').innerHTML=rows.length?rows.map(x=>`<tr><td>${esc(x.employee.name)}${x.employee.active===false?' <span class="muted">(неактивен)</span>':''}</td><td>${x.shifts}</td><td>${x.hours.toFixed(1)}</td><td>${x.target.toFixed(1)}</td><td style="color:${x.delta>0.5?'var(--amber)':x.delta< -0.5?'var(--muted)':'var(--green)'}">${x.delta>0?'+':''}${x.delta.toFixed(1)} ч</td><td>${x.load.toFixed(0)}%</td></tr>`).join(''):'<tr><td colspan="6" class="muted">Нет сотрудников</td></tr>'}
+function exportLoadCSV(){const rows=workloadRows(),lines=[['Сотрудник','Должность','Статус','Смены','Часы','Цель за месяц','Отклонение часов','Загрузка %'].map(csvCell).join(';')];for(const x of rows)lines.push([x.employee.name,x.employee.role||'',x.employee.active===false?'Неактивен':'Работает',x.shifts,x.hours.toFixed(2),x.target.toFixed(2),x.delta.toFixed(2),x.load.toFixed(1)].map(csvCell).join(';'));download(`workshift-load-${reportMonth()}.csv`,new Blob(['\uFEFF'+lines.join('\r\n')],{type:'text/csv;charset=utf-8'}));toast('Отчёт по нагрузке экспортирован')}
+function exportAuditCSV(){const rows=Array.isArray(state.auditLog)?state.auditLog:[],lines=[['Дата и время','Действие','Подробности'].map(csvCell).join(';')];for(const x of rows)lines.push([new Date(x.at).toLocaleString('ru-RU'),x.action,x.details].map(csvCell).join(';'));download(`workshift-audit-${new Date().toISOString().slice(0,10)}.csv`,new Blob(['\uFEFF'+lines.join('\r\n')],{type:'text/csv;charset=utf-8'}));toast('Журнал действий экспортирован')}
 function renderAll(){renderStaff();renderCalendar();renderPayroll();renderReports();renderAudit()}
 function download(name,blob){const a=document.createElement('a'),url=URL.createObjectURL(blob);a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000)}
 function exportJSON(){const data={format:'workshift-pro-backup',version:3,exportedAt:new Date().toISOString(),state};download(`workshift-backup-${new Date().toISOString().slice(0,10)}.json`,new Blob([JSON.stringify(data,null,2)],{type:'application/json'}));toast('Резервная копия подготовлена')}
@@ -317,7 +325,7 @@ $('filterStaff').onchange=renderCalendar;$('staffSearch').oninput=renderStaff;$(
 function changeMonth(n){viewMonth+=n;if(viewMonth<0){viewMonth=11;viewYear--}if(viewMonth>11){viewMonth=0;viewYear++}renderCalendar();renderStaff()}
 $('deleteShift').onclick=()=>{const id=$('shiftId').value;if(!id)return;const target=state.shifts.find(s=>s.id===id);$('shiftDialog').close();if(target&&confirm(target.locked?'Смена зафиксирована. Подтвердить удаление?':'Удалить запись графика?')){state.shifts=state.shifts.filter(s=>s.id!==id);logAction('Удаление записи графика',`${target.date} · ${employee(target.employeeId)?.name||''}`);persist().then(renderAll)}};
 $('autoPatternBtn').onclick=()=>{if(!selectedEmployee)return toast('Сначала выберите сотрудника');const e=employee(selectedEmployee);const pattern=prompt('Введите цикл: 5/2, 2/2 или 3/3','2/2');if(!['5/2','2/2','3/3'].includes(pattern))return;const [w,o]=pattern.split('/').map(Number),days=new Date(viewYear,viewMonth+1,0).getDate(),month=`${viewYear}-${String(viewMonth+1).padStart(2,'0')}`;if(!confirm(`Добавить цикл ${pattern} для ${e.name}? Существующие записи и зафиксированные смены будут сохранены; занятые даты будут пропущены.`))return;let added=0,skipped=0;for(let d=1;d<=days;d++){if((d-1)%(w+o)<w){const date=dateKey(viewYear,viewMonth,d);if(state.shifts.some(x=>x.employeeId===e.id&&x.date===date)){skipped++;continue}state.shifts.push({id:crypto.randomUUID(),date,employeeId:e.id,type:'work',start:'09:00',end:'21:00',break:1,nightHours:0,holiday:false,locked:false,source:'pattern'});added++}}logAction('Создание циклического графика',`${e.name} · ${pattern} · добавлено ${added}, пропущено ${skipped}`);persist().then(()=>{renderAll();toast(`Добавлено: ${added}; пропущено занятых дат: ${skipped}`)})};
-$('runChecks').onclick=runChecks;$('generatePlan').onclick=generatePlan;$('applyPlan').onclick=applyPlan;$('clearPlan').onclick=clearPlan;$('autoMonth').value=`${viewYear}-${String(viewMonth+1).padStart(2,'0')}`;$('autoCoverage').value=state.settings.coverage||1;$('payMonth').value=`${viewYear}-${String(viewMonth+1).padStart(2,'0')}`;$('payMonth').onchange=renderPayroll;$('payStaff').onchange=renderPayroll;
+$('runChecks').onclick=runChecks;$('exportLoadCsv').onclick=exportLoadCSV;$('exportAudit').onclick=exportAuditCSV;$('reportMonth').value=`${viewYear}-${String(viewMonth+1).padStart(2,'0')}`;$('reportMonth').onchange=renderReports;$('generatePlan').onclick=generatePlan;$('applyPlan').onclick=applyPlan;$('clearPlan').onclick=clearPlan;$('autoMonth').value=`${viewYear}-${String(viewMonth+1).padStart(2,'0')}`;$('autoCoverage').value=state.settings.coverage||1;$('payMonth').value=`${viewYear}-${String(viewMonth+1).padStart(2,'0')}`;$('payMonth').onchange=renderPayroll;$('payStaff').onchange=renderPayroll;
 ['nightPct','districtPct','northPct','holidayPct'].forEach(id=>$(id).value=state.settings[id]);$('savePaySettings').onclick=()=>{
  const ids=['nightPct','districtPct','northPct','holidayPct'],values=ids.map(id=>Number($(id).value));
  if(values.some(v=>!Number.isFinite(v)||v<0||v>300))return toast('Проценты должны быть в диапазоне от 0 до 300');
